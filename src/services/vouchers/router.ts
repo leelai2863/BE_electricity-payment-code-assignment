@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import { connectDB } from "@/lib/mongodb";
 import { writeAuditLog } from "@/lib/audit";
 import { extractFieldsFromImage } from "@/lib/openai-vision";
-import { MOCK_VOUCHERS } from "@/lib/mock-data";
 import { VoucherCode } from "@/models/VoucherCode";
 import type { VoucherRow } from "@/types/voucher";
 
@@ -55,13 +54,9 @@ router.get("/", async (req: Request, res: Response) => {
       .lean();
     const data = (docs as unknown as Record<string, unknown>[]).map(mapDoc);
     res.json({ data, source: "mongodb" });
-  } catch {
-    let data = MOCK_VOUCHERS;
-    if (status !== null && status !== "") {
-      const n = Number(status);
-      data = MOCK_VOUCHERS.filter((v) => v.status === n);
-    }
-    res.json({ data, source: "mock" });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "MongoDB unavailable";
+    res.status(503).json({ error: message, data: [] });
   }
 });
 

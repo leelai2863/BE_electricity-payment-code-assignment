@@ -4,3 +4,7 @@ dist/
 build/
 coverage/
 *.log
+docker-compose.override.yml
+# Local BSON dumps for Docker seed (keep dump/.gitkeep only if needed)
+mongo-seed/dump/*
+!mongo-seed/dump/.gitkeep

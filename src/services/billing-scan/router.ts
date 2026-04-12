@@ -3,7 +3,6 @@ import { connectDB } from "@/lib/mongodb";
 import { BillingScanHistory } from "@/models/BillingScanHistory";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import { serializeElectricBill, billHasIncompletePeriod } from "@/lib/electric-bill-serialize";
-import { VGREEN_SCANNED_ORDER } from "@/data/vgreen-scanned-batch";
 import type { ElectricBillDto } from "@/types/electric-bill";
 import { serializeHistory } from "@/lib/electric-bill-serialize";
 
@@ -41,13 +40,8 @@ router.get("/history", async (_req: Request, res: Response) => {
 
 /** GET /api/billing-scan/scanned-codes */
 router.get("/scanned-codes", async (_req: Request, res: Response) => {
-  function sortVgreen(a: ElectricBillDto, b: ElectricBillDto) {
-    const ia = VGREEN_SCANNED_ORDER.indexOf(a.customerCode);
-    const ib = VGREEN_SCANNED_ORDER.indexOf(b.customerCode);
-    if (ia === -1 && ib === -1) return a.customerCode.localeCompare(b.customerCode);
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
+  function sortByCustomerCode(a: ElectricBillDto, b: ElectricBillDto) {
+    return a.customerCode.localeCompare(b.customerCode);
   }
 
   try {
@@ -61,7 +55,7 @@ router.get("/scanned-codes", async (_req: Request, res: Response) => {
       .map((d) => serializeElectricBill(d))
       // Lọc thêm cấp period: bỏ bill không còn kỳ nào chưa hoàn tất
       .filter(billHasIncompletePeriod)
-      .sort(sortVgreen);
+      .sort(sortByCustomerCode);
     res.json({ data, source: "mongodb" });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Không đọc được MongoDB";

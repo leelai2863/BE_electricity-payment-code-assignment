@@ -29,7 +29,7 @@ const ElectricBillRecordSchema = new Schema(
     evn: { type: String, default: "EVNCPC" },
     company: { type: String, default: "" },
     periods: { type: [PeriodSchema], default: [] },
-    /** Lưu id đại lý dạng string (mock tree hoặc ObjectId string) */
+    /** Lưu id đại lý dạng string (ObjectId hoặc mã tham chiếu) */
     assignedAgencyId: { type: String, default: null, index: true },
     assignedAgencyName: { type: String, default: null },
     assignedAt: { type: Date, default: null },

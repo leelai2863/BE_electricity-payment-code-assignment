@@ -14,7 +14,7 @@ import { ElectricBillRecord } from "../src/models/ElectricBillRecord";
 import {
   VGREEN_SCANNED_BATCH,
   deadlineIsoFromDdMm,
-} from "../src/data/vgreen-scanned-batch";
+} from "./data/vgreen-scanned-batch";
 import { mergeScanAmountIntoPeriods } from "../src/lib/period-scan-merge";
 import type { ElectricBillPeriod } from "../src/types/electric-bill";
 

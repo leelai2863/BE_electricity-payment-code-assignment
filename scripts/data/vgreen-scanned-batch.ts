@@ -1,5 +1,5 @@
 /**
- * Lô mock quét cước — Công ty V-GREEN (tháng 3), thứ tự như sheet BỘ_LỌC_MÃ_KH.
+ * Danh sách mã V-GREEN dùng cho npm run seed:vgreen / seed:vouchers (tháng 3/2026).
  * Hạn thanh toán: DD/MM trong tháng 4/2026 (kỳ T3).
  */
 export type VgreenScannedRowDef = {
@@ -39,9 +39,6 @@ export const VGREEN_SCANNED_BATCH: VgreenScannedRowDef[] = [
   { customerCode: "PA03HL0052419", amount: 106_380_216, deadlineDdMm: "08/04" },
   { customerCode: "PA05090089721", amount: 106_652_765, deadlineDdMm: "09/04" },
 ];
-
-/** Thứ tự hiển thị trên trang quét cước / sort API */
-export const VGREEN_SCANNED_ORDER = VGREEN_SCANNED_BATCH.map((r) => r.customerCode);
 
 export function deadlineIsoFromDdMm(ddMm: string | null): string | null {
   return isoApril2026(ddMm);

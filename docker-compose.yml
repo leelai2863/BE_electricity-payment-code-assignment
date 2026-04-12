@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: .
+    container_name: giaodich-backend
+    ports:
+      - "3001:3001"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/giaodich_voucher
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_VISION_MODEL=${OPENAI_VISION_MODEL:-gemini-2.5-flash}
+      - OPENAI_TEXT_MODEL=${OPENAI_TEXT_MODEL:-gemini-2.5-flash}
+      - PORT=3001
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: giaodich-mongo
+    # Host port (default 27018) — tránh trùng Mongo cài trên máy (27017). Trong mạng compose vẫn là mongo:27017.
+    ports:
+      - "${MONGO_HOST_PORT:-27018}:27017"
+    volumes:
+      - mongo_data:/data/db
+      # First-time init: .sh in this folder runs only when data volume is empty (see mongo-seed/README.txt)
+      - ./mongo-seed:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

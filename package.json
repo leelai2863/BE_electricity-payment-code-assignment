@@ -6,7 +6,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc --noEmit",
-    "seed:vgreen": "tsx scripts/seed-vgreen-electric-bills.ts"
+    "seed:vgreen": "tsx scripts/seed-vgreen-electric-bills.ts",
+    "seed:vouchers": "tsx scripts/seed-voucher-codes.ts",
+    "docker:dump-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dump-local-mongo-to-seed.ps1",
+    "docker:restore-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-seed-to-docker.ps1"
   },
   "dependencies": {
     "cors": "^2.8.5",
