@@ -6,7 +6,6 @@ import billingScanRouter from "@/services/billing-scan/router";
 import electricBillsRouter from "@/services/electric-bills/router";
 import vouchersRouter from "@/services/vouchers/router";
 import customerAccountsRouter from "@/services/customer-accounts/router";
-import systemModulesRouter from "@/services/system-modules/router";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -20,7 +19,6 @@ app.use("/api/billing-scan", billingScanRouter);
 app.use("/api/electric-bills", electricBillsRouter);
 app.use("/api/vouchers", vouchersRouter);
 app.use("/api/customer-accounts", customerAccountsRouter);
-app.use("/api/system-modules", systemModulesRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
