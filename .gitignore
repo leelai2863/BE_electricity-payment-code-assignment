@@ -8,3 +8,8 @@ docker-compose.override.yml
 # Local BSON dumps for Docker seed (keep dump/.gitkeep only if needed)
 mongo-seed/dump/*
 !mongo-seed/dump/.gitkeep
+
+# Artefact deploy scp (build local — không commit file lớn)
+deploy/be-electric-backend.docker.tar
+deploy/be-electric-backend.docker.tar.gz
+deploy/compose-and-scripts.zip
