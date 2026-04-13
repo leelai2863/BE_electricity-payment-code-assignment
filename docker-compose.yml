@@ -11,8 +11,6 @@ services:
       - OPENAI_TEXT_MODEL=${OPENAI_TEXT_MODEL:-gemini-2.5-flash}
       - PORT=3001
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
-      - STAGE_IMPORT_ENABLED=${STAGE_IMPORT_ENABLED:-false}
-      - STAGE_IMPORT_SECRET=${STAGE_IMPORT_SECRET:-}
     depends_on:
       mongo:
         condition: service_healthy

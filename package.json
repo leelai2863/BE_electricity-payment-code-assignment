@@ -8,12 +8,13 @@
     "build": "tsc --noEmit",
     "seed:vgreen": "tsx scripts/seed-vgreen-electric-bills.ts",
     "seed:vouchers": "tsx scripts/seed-voucher-codes.ts",
-    "docker:dump-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dump-local-mongo-to-seed.ps1",
+    "seed:modules": "tsx scripts/import-modules-from-xlsx.ts",
     "docker:restore-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-seed-to-docker.ps1"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.14.0",

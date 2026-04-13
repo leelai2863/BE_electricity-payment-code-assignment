@@ -8,7 +8,7 @@ $backendRoot = Split-Path -Parent $PSScriptRoot
 $dumpHost = Join-Path $backendRoot "mongo-seed/dump"
 $marker = Join-Path $dumpHost "giaodich_voucher"
 if (-not (Test-Path $marker)) {
-  Write-Error "Chưa có dump: cần thư mục $marker (chạy npm run docker:dump-mongo-seed khi Mongo trên máy còn dữ liệu, hoặc copy bản dump vào đó)."
+  Write-Error "Chưa có dump: cần thư mục $marker (tạo bằng mongodump hoặc copy bản BSON vào đó)."
 }
 
 docker run --rm `
