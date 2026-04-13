@@ -213,15 +213,16 @@ Server khởi động tại `http://localhost:3001`.
 
 **Cấu trúc file Excel:**
 
-| Cột A | Cột B | Cột C |
-|-------|-------|-------|
-| Mã khách hàng | Số tiền (VND) | Hạn thanh toán (DD/MM) |
-| `PC05II0947012` | `15.892.913` | `06/04` |
-| `PA05040062618` | `32,961,427` | `09/04` |
+| Cột A | Cột B | Cột C | Cột D |
+|-------|-------|-------|-------|
+| Mã khách hàng | Số tiền (VND) | EVN | Hạn thanh toán (DD/MM) |
+| `PC05II0947012` | `15.892.913` | `EVNCPC` | `06/04` |
+| `PA05040062618` | `32,961,427` | `EVNHCMC` | `09/04` |
 
 - Dòng đầu nếu là header sẽ tự động bị bỏ qua
 - Số tiền chấp nhận định dạng: `15.892.913`, `15,892,913`, `15892913`
-- Cột C (hạn) là tuỳ chọn — bỏ trống không sao
+- Cột C (EVN) là tuỳ chọn — bỏ trống sẽ mặc định `EVNCPC`
+- Cột D (hạn) là tuỳ chọn — bỏ trống không sao
 
 **Chạy lệnh:**
 
