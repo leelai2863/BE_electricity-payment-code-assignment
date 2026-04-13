@@ -12,15 +12,19 @@
     "docker:restore-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-seed-to-docker.ps1"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.14.0",
     "openai": "^4.96.0",
     "zod": "^3.24.3"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
     "dotenv": "^16.4.7",
     "tsx": "^4.19.3",
