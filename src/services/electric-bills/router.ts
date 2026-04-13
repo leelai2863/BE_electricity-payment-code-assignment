@@ -5,7 +5,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import { AssignedCode } from "../../models/AssignedCode";
 import { VoucherCode } from "@/models/VoucherCode";
-import { serializeElectricBill, billHasIncompletePeriod, billIsFullyCompleted } from "@/lib/electric-bill-serialize";
+import { serializeElectricBill, billHasIncompletePeriod } from "@/lib/electric-bill-serialize";
 import { isPeriodReadyForDealCompletion } from "@/lib/electric-bill-completion";
 import { periodsDtoToMongoSchema } from "@/lib/electric-bill-mongo-periods";
 import { normalizeScanDdMmInput, scanDdMmIsNotFuture } from "@/lib/scan-ddmm";
@@ -32,6 +32,10 @@ function passesAmountFilter(total: number, filter: AmountFilter): boolean {
     case "lte500": return total >= 300 * M && total <= 500 * M;
     case "gt500":  return total > 500 * M;
   }
+}
+
+function completedAmountPeriods(periods: ElectricBillPeriod[]): ElectricBillPeriod[] {
+  return periods.filter((p) => p.amount != null && Boolean(p.dealCompletedAt));
 }
 
 type PeriodPatch = (Partial<Omit<ElectricBillPeriod, "ky">> & { ky: 1 | 2 | 3 })[];
@@ -230,7 +234,7 @@ router.get("/invoice-list", async (_req: Request, res: Response) => {
 });
 
 
-/** GET /api/electric-bills/invoice-completed-months — các (năm, tháng) có ít nhất một hóa đơn đã xác nhận đủ kỳ */
+/** GET /api/electric-bills/invoice-completed-months — các (năm, tháng) có ít nhất một cặp mã+số tiền đã xác nhận */
 router.get("/invoice-completed-months", async (_req: Request, res: Response) => {
   try {
     await connectDB();
@@ -238,7 +242,7 @@ router.get("/invoice-completed-months", async (_req: Request, res: Response) => 
     const seen = new Map<string, { year: number; month: number }>();
     for (const d of docs) {
       const bill = serializeElectricBill(d as Record<string, unknown>);
-      if (!billIsFullyCompleted(bill)) continue;
+      if (completedAmountPeriods(bill.periods).length === 0) continue;
       const k = `${bill.year}-${bill.month}`;
       if (!seen.has(k)) seen.set(k, { year: bill.year, month: bill.month });
     }
@@ -253,7 +257,7 @@ router.get("/invoice-completed-months", async (_req: Request, res: Response) => 
   }
 });
 
-/** GET /api/electric-bills/invoice-completed?year=&month= — hóa đơn đã xác nhận đủ trong tháng kỳ đó */
+/** GET /api/electric-bills/invoice-completed?year=&month= — hóa đơn có ít nhất một cặp mã+số tiền đã xác nhận trong tháng */
 router.get("/invoice-completed", async (req: Request, res: Response) => {
   const year = Number(req.query.year);
   const month = Number(req.query.month);
@@ -266,7 +270,8 @@ router.get("/invoice-completed", async (req: Request, res: Response) => {
     const docs = await ElectricBillRecord.find({ year, month }).sort({ customerCode: 1 }).limit(5000).lean();
     const data = docs
       .map((d) => serializeElectricBill(d as Record<string, unknown>))
-      .filter(billIsFullyCompleted);
+      .map((bill) => ({ ...bill, periods: completedAmountPeriods(bill.periods) }))
+      .filter((bill) => bill.periods.length > 0);
     res.json({ data, source: "mongodb" });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Không đọc được MongoDB";
