@@ -1,10 +1,11 @@
 /**
  * Đọc Excel (sheet đầu): cột A = tên module, cột B = mã (vd 1.0.0, 2.1.1), upsert vào MongoDB collection systemmodules.
  *
- * Chạy từ thư mục backend (cần MONGODB_URI trong .env):
- *   npm run seed:modules -- "D:\\path\\to\\danh-muc.xlsx"
- * hoặc:
- *   MODULES_XLSX_PATH=D:\\path\\to\\file.xlsx npm run seed:modules
+ * Cần MONGODB_URI trong .env. Đường dẫn file (argv hoặc MODULES_XLSX_PATH) tính từ thư mục gốc project
+ * (cùng cấp package.json), ví dụ: ./maHĐ.xlsx — chạy được trên mọi máy nếu file nằm trong repo.
+ *
+ *   npm run seed:modules -- ./maHĐ.xlsx
+ * hoặc MODULES_XLSX_PATH=./maHĐ.xlsx npm run seed:modules
  *
  * Bỏ qua dòng trống; dòng có tên nhưng không có mã sẽ bị bỏ qua (cần cả hai cột).
  */
@@ -37,16 +38,17 @@ function looksLikeCodeCell(code: string): boolean {
 }
 
 async function main() {
+  const backendRoot = path.resolve(__dirname, "..");
+  const rawPath = (process.argv[2] || process.env.MODULES_XLSX_PATH || "").trim();
   const filePath =
-    process.argv[2] ||
-    process.env.MODULES_XLSX_PATH ||
+    rawPath ||
     (() => {
       throw new Error(
-        "Thiếu đường dẫn file. Dùng: npm run seed:modules -- \"C:\\\\path\\\\file.xlsx\" hoặc MODULES_XLSX_PATH=..."
+        "Thiếu đường dẫn file. Dùng: npm run seed:modules -- ./maHĐ.xlsx hoặc MODULES_XLSX_PATH=./maHĐ.xlsx (tương đối từ thư mục gốc project)."
       );
     })();
 
-  const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+  const absolute = path.isAbsolute(filePath) ? path.normalize(filePath) : path.resolve(backendRoot, filePath);
 
   await connectDB();
 
