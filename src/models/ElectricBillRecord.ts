@@ -44,6 +44,12 @@ const ElectricBillRecordSchema = new Schema(
 );
 
 ElectricBillRecordSchema.index({ customerCode: 1, year: 1, month: 1 }, { unique: true });
+ElectricBillRecordSchema.index({ year: 1, month: 1, customerCode: 1 });
+ElectricBillRecordSchema.index({ updatedAt: -1 });
+ElectricBillRecordSchema.index({ "periods.assignedAgencyName": 1 });
+ElectricBillRecordSchema.index({ "periods.scanDdMm": 1 });
+ElectricBillRecordSchema.index({ "periods.paymentDeadline": 1 });
+ElectricBillRecordSchema.index({ "periods.dealCompletedAt": 1 });
 
 export type ElectricBillRecordDocument = InferSchemaType<typeof ElectricBillRecordSchema> & {
   _id: mongoose.Types.ObjectId;

@@ -38,6 +38,175 @@ function completedAmountPeriods(periods: ElectricBillPeriod[]): ElectricBillPeri
   return periods.filter((p) => p.amount != null && Boolean(p.dealCompletedAt));
 }
 
+type InvoiceSortBy =
+  | "customerCode"
+  | "evn"
+  | "month"
+  | "year"
+  | "assignedAt"
+  | "updatedAt"
+  | "createdAt"
+  | "_id";
+type SortDir = "asc" | "desc";
+
+type InvoiceListParams = {
+  page: number;
+  pageSize: number;
+  customerCode?: string;
+  evn?: string;
+  assignedAgencyName?: string;
+  scanDdMm?: string;
+  paymentDeadline?: string;
+  month?: number;
+  year?: number;
+  done?: boolean;
+  includeArchived: boolean;
+  updatedAfter?: Date;
+  sortBy: InvoiceSortBy;
+  sortDir: SortDir;
+  cursor?: string;
+  includeFacets: boolean;
+};
+
+const INVOICE_LIST_PROJECTION = {
+  customerCode: 1,
+  month: 1,
+  year: 1,
+  monthLabel: 1,
+  evn: 1,
+  company: 1,
+  assignedAgencyId: 1,
+  assignedAgencyName: 1,
+  assignedAt: 1,
+  customerName: 1,
+  paymentConfirmed: 1,
+  cccdConfirmed: 1,
+  cardType: 1,
+  dealCompletedAt: 1,
+  periods: 1,
+  updatedAt: 1,
+  createdAt: 1,
+} as const;
+
+const INVOICE_SORT_FIELD_MAP: Record<InvoiceSortBy, string> = {
+  customerCode: "customerCode",
+  evn: "evn",
+  month: "month",
+  year: "year",
+  assignedAt: "assignedAt",
+  updatedAt: "updatedAt",
+  createdAt: "createdAt",
+  _id: "_id",
+};
+
+function toBool(raw: unknown): boolean | undefined {
+  if (raw == null) return undefined;
+  const s = String(raw).trim().toLowerCase();
+  if (s === "true" || s === "1") return true;
+  if (s === "false" || s === "0") return false;
+  return undefined;
+}
+
+function toPositiveInt(raw: unknown, fallback: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.trunc(n);
+}
+
+function parseInvoiceListParams(req: Request): InvoiceListParams {
+  const page = toPositiveInt(req.query.page, 1);
+  const pageSize = Math.min(500, toPositiveInt(req.query.pageSize, 100));
+  const monthRaw = Number(req.query.month);
+  const yearRaw = Number(req.query.year);
+  const done = toBool(req.query.done);
+  const includeArchived = toBool(req.query.includeArchived) ?? false;
+  const includeFacets = toBool(req.query.includeFacets) ?? false;
+  const updatedAfterRaw = typeof req.query.updatedAfter === "string" ? req.query.updatedAfter : undefined;
+  const updatedAfter = updatedAfterRaw ? new Date(updatedAfterRaw) : undefined;
+  const sortDir = (String(req.query.sortDir ?? "asc").toLowerCase() === "desc" ? "desc" : "asc") as SortDir;
+  const sortByRaw = String(req.query.sortBy ?? "customerCode") as InvoiceSortBy;
+  const sortBy: InvoiceSortBy = INVOICE_SORT_FIELD_MAP[sortByRaw] ? sortByRaw : "customerCode";
+  const cursor = typeof req.query.cursor === "string" && mongoose.isValidObjectId(req.query.cursor)
+    ? req.query.cursor
+    : undefined;
+
+  return {
+    page,
+    pageSize,
+    customerCode: typeof req.query.customerCode === "string" ? req.query.customerCode.trim() : undefined,
+    evn: typeof req.query.evn === "string" ? req.query.evn.trim() : undefined,
+    assignedAgencyName:
+      typeof req.query.assignedAgencyName === "string" ? req.query.assignedAgencyName.trim() : undefined,
+    scanDdMm: typeof req.query.scanDdMm === "string" ? req.query.scanDdMm.trim() : undefined,
+    paymentDeadline: typeof req.query.paymentDeadline === "string" ? req.query.paymentDeadline.trim() : undefined,
+    month: Number.isInteger(monthRaw) && monthRaw >= 1 && monthRaw <= 12 ? monthRaw : undefined,
+    year: Number.isInteger(yearRaw) && yearRaw >= 2000 ? yearRaw : undefined,
+    done,
+    includeArchived,
+    updatedAfter: updatedAfter && !Number.isNaN(updatedAfter.getTime()) ? updatedAfter : undefined,
+    sortBy,
+    sortDir,
+    cursor,
+    includeFacets,
+  };
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildInvoiceListMatch(params: InvoiceListParams): Record<string, unknown> {
+  const and: Record<string, unknown>[] = [];
+  if (params.customerCode) and.push({ customerCode: { $regex: escapeRegex(params.customerCode), $options: "i" } });
+  if (params.evn) and.push({ evn: { $regex: escapeRegex(params.evn), $options: "i" } });
+  if (params.assignedAgencyName) {
+    and.push({
+      periods: {
+        $elemMatch: {
+          assignedAgencyName: { $regex: escapeRegex(params.assignedAgencyName), $options: "i" },
+        },
+      },
+    });
+  }
+  if (params.scanDdMm) and.push({ periods: { $elemMatch: { scanDdMm: params.scanDdMm } } });
+  if (params.paymentDeadline) {
+    const d = new Date(params.paymentDeadline);
+    if (!Number.isNaN(d.getTime())) {
+      const start = new Date(d);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(d);
+      end.setHours(23, 59, 59, 999);
+      and.push({ periods: { $elemMatch: { paymentDeadline: { $gte: start, $lte: end } } } });
+    }
+  }
+  if (params.month != null) and.push({ month: params.month });
+  if (params.year != null) and.push({ year: params.year });
+  if (params.updatedAfter) and.push({ updatedAt: { $gt: params.updatedAfter } });
+  if (params.done === true) {
+    and.push({
+      periods: { $elemMatch: { amount: { $ne: null } } },
+    });
+    and.push({
+      periods: { $not: { $elemMatch: { amount: { $ne: null }, dealCompletedAt: null } } },
+    });
+  } else if (params.done === false || !params.includeArchived) {
+    and.push({
+      periods: { $elemMatch: { amount: { $ne: null }, dealCompletedAt: null } },
+    });
+  }
+  return and.length > 0 ? { $and: and } : {};
+}
+
+function invoiceListSort(sortBy: InvoiceSortBy, sortDir: SortDir): Record<string, 1 | -1> {
+  const field = INVOICE_SORT_FIELD_MAP[sortBy] ?? "customerCode";
+  const dir: 1 | -1 = sortDir === "desc" ? -1 : 1;
+  return { [field]: dir, _id: dir };
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
 type PeriodPatch = (Partial<Omit<ElectricBillPeriod, "ky">> & { ky: 1 | 2 | 3 })[];
 
 type PatchBody = {
@@ -219,17 +388,129 @@ router.get("/unassigned", async (req: Request, res: Response) => {
 });
 
 /** GET /api/electric-bills/invoice-list */
-router.get("/invoice-list", async (_req: Request, res: Response) => {
+router.get("/invoice-list", async (req: Request, res: Response) => {
+  const params = parseInvoiceListParams(req);
+  const match = buildInvoiceListMatch(params);
+  const sort = invoiceListSort(params.sortBy, params.sortDir);
+  const dbStarted = nowMs();
   try {
     await connectDB();
-    const docs = await ElectricBillRecord.find({}).sort({ customerCode: 1 }).limit(5000).lean();
-    const data = docs
-      .map((d) => serializeElectricBill(d as Record<string, unknown>))
-      .filter(billHasIncompletePeriod);
-    res.json({ data, source: "mongodb" });
+
+    // Cursor mode (optimized for incremental scrolling) when sort by _id.
+    const cursorMatch: Record<string, unknown> = { ...match };
+    if (params.cursor && params.sortBy === "_id") {
+      const dir = params.sortDir === "desc" ? "$lt" : "$gt";
+      const cursorAnd = (cursorMatch.$and as Record<string, unknown>[] | undefined) ?? [];
+      cursorAnd.push({ _id: { [dir]: new mongoose.Types.ObjectId(params.cursor) } });
+      cursorMatch.$and = cursorAnd;
+    }
+
+    const totalPromise = ElectricBillRecord.countDocuments(match).exec();
+    const docsPromise = ElectricBillRecord.find(cursorMatch, INVOICE_LIST_PROJECTION)
+      .sort(sort)
+      .skip(params.cursor ? 0 : (params.page - 1) * params.pageSize)
+      .limit(params.pageSize + 1)
+      .lean()
+      .exec();
+
+    const [total, docsRaw] = await Promise.all([totalPromise, docsPromise]);
+    const dbQueryMs = nowMs() - dbStarted;
+
+    const hasNext = docsRaw.length > params.pageSize;
+    const docs = hasNext ? docsRaw.slice(0, params.pageSize) : docsRaw;
+    const serializeStarted = nowMs();
+    const items = docs.map((d) => serializeElectricBill(d as Record<string, unknown>));
+    const serializeMs = nowMs() - serializeStarted;
+    const nextCursor = hasNext ? String(docs[docs.length - 1]?._id ?? "") : null;
+
+    let aggregations: Record<string, unknown> = {
+      total,
+      incomplete: items.filter(billHasIncompletePeriod).length,
+      months: [...new Set(items.map((x) => `${x.year}-${x.month}`))].length,
+    };
+
+    if (params.includeFacets) {
+      const facetsStarted = nowMs();
+      const facetRows = await ElectricBillRecord.aggregate([
+        { $match: match },
+        { $project: { customerCode: 1, evn: 1, month: 1, year: 1, periods: 1 } },
+        { $unwind: "$periods" },
+        {
+          $group: {
+            _id: null,
+            customerCodes: { $addToSet: "$customerCode" },
+            evns: { $addToSet: "$evn" },
+            months: { $addToSet: "$month" },
+            years: { $addToSet: "$year" },
+            assignedAgencyNames: { $addToSet: "$periods.assignedAgencyName" },
+            scanDdMms: { $addToSet: "$periods.scanDdMm" },
+          },
+        },
+        { $project: { _id: 0 } },
+      ]).exec();
+      const facets = facetRows[0] ?? {};
+      aggregations = {
+        ...aggregations,
+        facets: {
+          customerCode: (facets.customerCodes ?? []).filter(Boolean).slice(0, 500),
+          evn: (facets.evns ?? []).filter(Boolean).slice(0, 200),
+          assignedAgencyName: (facets.assignedAgencyNames ?? []).filter(Boolean).slice(0, 500),
+          scanDdMm: (facets.scanDdMms ?? []).filter(Boolean).slice(0, 500),
+          month: (facets.months ?? []).filter((x: unknown) => Number.isInteger(Number(x))).sort((a: number, b: number) => a - b),
+          year: (facets.years ?? []).filter((x: unknown) => Number.isInteger(Number(x))).sort((a: number, b: number) => a - b),
+        },
+        facetsMs: Math.round(nowMs() - facetsStarted),
+      };
+    }
+
+    const payload = {
+      items,
+      // backward-compatible key for existing FE
+      data: items,
+      total,
+      hasNext,
+      nextCursor,
+      page: params.page,
+      pageSize: params.pageSize,
+      aggregations,
+      source: "mongodb",
+      query: {
+        includeArchived: params.includeArchived,
+        done: params.done,
+        sortBy: params.sortBy,
+        sortDir: params.sortDir,
+        updatedAfter: params.updatedAfter?.toISOString() ?? null,
+      },
+      metrics: {
+        dbQueryMs: Math.round(dbQueryMs),
+        serializeMs: Math.round(serializeMs),
+        responseBytes: 0,
+      },
+    };
+    const responseBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+    payload.metrics.responseBytes = responseBytes;
+    console.info("[electric-bills.invoice-list]", {
+      total,
+      returned: items.length,
+      hasNext,
+      dbQueryMs: payload.metrics.dbQueryMs,
+      serializeMs: payload.metrics.serializeMs,
+      responseBytes,
+    });
+    res.json(payload);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Không đọc được MongoDB";
-    res.status(503).json({ error: message, data: [] });
+    res.status(503).json({
+      error: message,
+      items: [],
+      data: [],
+      total: 0,
+      hasNext: false,
+      nextCursor: null,
+      page: params.page,
+      pageSize: params.pageSize,
+      aggregations: {},
+    });
   }
 });
 
