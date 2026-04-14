@@ -1,6 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { agenciesAsTreeRoots } from "@/lib/agency-registry";
-import { createAgency, isMongoDuplicateKeyError, listAgencyOptions } from "@/lib/agency-repository";
+import {
+  createAgency,
+  deleteAgency,
+  isMongoDuplicateKeyError,
+  listAgencyOptions,
+  updateAgencyName,
+} from "@/lib/agency-repository";
 
 const router = Router();
 
@@ -54,6 +60,52 @@ router.post("/", async (req: Request, res: Response) => {
     }
     console.error("POST /api/agencies error:", e);
     res.status(500).json({ error: "Lỗi lưu đại lý" });
+  }
+});
+
+/** PATCH /api/agencies/:id — sửa tên đại lý (body: { name }) */
+router.patch("/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  const body = req.body as { name?: string };
+  const name = typeof body.name === "string" ? body.name : "";
+  try {
+    const data = await updateAgencyName({ id, name });
+    res.json({ data });
+  } catch (e) {
+    if (e instanceof Error && e.message === "ID đại lý không hợp lệ") {
+      res.status(400).json({ error: e.message });
+      return;
+    }
+    if (e instanceof Error && e.message === "Tên đại lý không được để trống") {
+      res.status(400).json({ error: e.message });
+      return;
+    }
+    if (e instanceof Error && e.message === "Không tìm thấy đại lý") {
+      res.status(404).json({ error: e.message });
+      return;
+    }
+    console.error("PATCH /api/agencies/:id error:", e);
+    res.status(500).json({ error: "Lỗi cập nhật đại lý" });
+  }
+});
+
+/** DELETE /api/agencies/:id — xóa mềm đại lý */
+router.delete("/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  try {
+    await deleteAgency(id);
+    res.json({ ok: true });
+  } catch (e) {
+    if (e instanceof Error && e.message === "ID đại lý không hợp lệ") {
+      res.status(400).json({ error: e.message });
+      return;
+    }
+    if (e instanceof Error && e.message === "Không tìm thấy đại lý") {
+      res.status(404).json({ error: e.message });
+      return;
+    }
+    console.error("DELETE /api/agencies/:id error:", e);
+    res.status(500).json({ error: "Lỗi xóa đại lý" });
   }
 });
 

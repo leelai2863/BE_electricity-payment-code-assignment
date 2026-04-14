@@ -368,10 +368,6 @@ router.post("/assign", async (req: Request, res: Response) => {
     res.status(404).json({ error: "Không tìm thấy hóa đơn" });
     return;
   }
-  if (doc.assignedAgencyId) {
-    res.status(409).json({ error: "Đã được giao đại lý" });
-    return;
-  }
   const dto = serializeElectricBill(doc.toObject());
 
   // Kiểm tra mã + số tiền nào đã bị giao cho đại lý khác trong tháng này chưa
@@ -392,9 +388,7 @@ router.post("/assign", async (req: Request, res: Response) => {
     }
   }
 
-  doc.assignedAgencyId = body.agencyId;
-  doc.assignedAgencyName = body.agencyName;
-  doc.assignedAt = new Date();
+  const assignedAt = new Date();
   const nextPeriods = dto.periods.map((p) => {
     if (p.amount == null) return { ...p };
     return {
@@ -404,9 +398,25 @@ router.post("/assign", async (req: Request, res: Response) => {
       dlGiaoName: p.dlGiaoName?.trim() ? p.dlGiaoName : body.agencyName,
     };
   });
-  doc.set("periods", periodsDtoToMongoSchema(nextPeriods) as typeof doc.periods);
-  doc.markModified("periods");
-  await doc.save();
+  const updatedDoc = await ElectricBillRecord.findOneAndUpdate(
+    {
+      _id: doc._id,
+      $or: [{ assignedAgencyId: null }, { assignedAgencyId: { $exists: false } }],
+    },
+    {
+      $set: {
+        assignedAgencyId: body.agencyId,
+        assignedAgencyName: body.agencyName,
+        assignedAt,
+        periods: periodsDtoToMongoSchema(nextPeriods),
+      },
+    },
+    { new: true }
+  ).lean();
+  if (!updatedDoc) {
+    res.status(409).json({ error: "Mã đã được giao bởi người khác. Vui lòng tải lại danh sách." });
+    return;
+  }
 
   // Ghi vào bảng mã đã giao (theo tháng)
   for (const p of nextPeriods) {
@@ -431,7 +441,7 @@ router.post("/assign", async (req: Request, res: Response) => {
     metadata: { agencyId: body.agencyId, agencyName: body.agencyName, customerCode: doc.customerCode },
   });
 
-  res.json({ data: serializeElectricBill(doc.toObject()), source: "mongodb" });
+  res.json({ data: serializeElectricBill(updatedDoc as Record<string, unknown>), source: "mongodb" });
 });
 
 /** PATCH /api/electric-bills/:id */

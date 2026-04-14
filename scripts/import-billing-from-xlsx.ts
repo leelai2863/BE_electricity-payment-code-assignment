@@ -4,7 +4,8 @@
  * Cấu trúc sheet (bỏ qua dòng header tự động):
  *   Cột A = mã khách hàng (customerCode)
  *   Cột B = số tiền VND  (amount — chấp nhận "15.892.913", "15,892,913" hoặc số thuần)
- *   Cột C = hạn thanh toán (DD/MM — tuỳ chọn, ví dụ "06/04")
+ *   Cột C = EVN (ví dụ EVNCPC, EVNHCMC...) — tuỳ chọn
+ *   Cột D = hạn thanh toán (DD/MM — tuỳ chọn, ví dụ "06/04")
  *
  * Chạy từ thư mục backend:
  *   npm run seed:billing -- ./maHĐ.xlsx
@@ -23,7 +24,7 @@ import type { ElectricBillPeriod } from "../src/types/electric-bill";
 const YEAR = 2026;
 const MONTH = 3;
 const COMPANY = "V-GREEN";
-const EVN = "EVNCPC";
+const DEFAULT_EVN = "EVNCPC";
 const SCAN_ISO = new Date().toISOString();
 
 /** Parse số tiền từ chuỗi như "15.892.913", "15,892,913" hoặc số thuần */
@@ -54,6 +55,35 @@ function looksLikeHeader(a: string, b: string): boolean {
   return false;
 }
 
+type ColumnMap = {
+  customerCode: number;
+  amount: number;
+  evn: number | null;
+  deadline: number | null;
+};
+
+function detectColumns(ws: ExcelJS.Worksheet): ColumnMap {
+  const r1 = ws.getRow(1);
+  const headers = [1, 2, 3, 4, 5, 6].map((idx) =>
+    String(r1.getCell(idx).text ?? r1.getCell(idx).value ?? "")
+      .trim()
+      .toLowerCase()
+  );
+
+  const findIdx = (patterns: RegExp[]): number | null => {
+    const i = headers.findIndex((h) => patterns.some((p) => p.test(h)));
+    return i >= 0 ? i + 1 : null;
+  };
+
+  const customerCode =
+    findIdx([/(mã|ma).*(kh|khách|customer|code)/, /(customer).*(code)/, /^m(ã|a)\s*kh/i]) ?? 1;
+  const amount = findIdx([/(số|so).*(tiền|tien)/, /amount/, /giá trị|gia tri/]) ?? 2;
+  const evn = findIdx([/^evn$/, /điện lực|dien luc/]);
+  const deadline = findIdx([/hạn.*thanh.*toán|han.*thanh.*toan/, /deadline/, /hạn|han/]);
+
+  return { customerCode, amount, evn, deadline };
+}
+
 async function main() {
   const backendRoot = path.resolve(__dirname, "..");
   const rawPath = (process.argv[2] ?? process.env.BILLING_XLSX_PATH ?? "").trim();
@@ -75,11 +105,13 @@ async function main() {
   const ws = wb.worksheets[0];
   if (!ws) throw new Error("File không có sheet nào.");
 
+  const cols = detectColumns(ws);
+
   // Xác định dòng bắt đầu (bỏ qua header nếu có)
   let startRow = 1;
   const r1 = ws.getRow(1);
-  const a1 = String(r1.getCell(1).text ?? r1.getCell(1).value ?? "").trim();
-  const b1 = String(r1.getCell(2).text ?? r1.getCell(2).value ?? "").trim();
+  const a1 = String(r1.getCell(cols.customerCode).text ?? r1.getCell(cols.customerCode).value ?? "").trim();
+  const b1 = String(r1.getCell(cols.amount).text ?? r1.getCell(cols.amount).value ?? "").trim();
   if (looksLikeHeader(a1, b1)) startRow = 2;
 
   let created = 0;
@@ -88,13 +120,15 @@ async function main() {
 
   for (let rowIdx = startRow; rowIdx <= ws.rowCount; rowIdx++) {
     const row = ws.getRow(rowIdx);
-    const rawA = row.getCell(1).text ?? row.getCell(1).value;
-    const rawB = row.getCell(2).text ?? row.getCell(2).value;
-    const rawC = row.getCell(3).text ?? row.getCell(3).value;
+    const rawA = row.getCell(cols.customerCode).text ?? row.getCell(cols.customerCode).value;
+    const rawB = row.getCell(cols.amount).text ?? row.getCell(cols.amount).value;
+    const rawEvn = cols.evn ? row.getCell(cols.evn).text ?? row.getCell(cols.evn).value : null;
+    const rawDeadline = cols.deadline ? row.getCell(cols.deadline).text ?? row.getCell(cols.deadline).value : null;
 
     const customerCode = String(rawA ?? "").trim();
     const amount = parseAmount(rawB);
-    const deadlineIso = parseDeadline(rawC);
+    const deadlineIso = parseDeadline(rawDeadline);
+    const evn = String(rawEvn ?? "").trim() || DEFAULT_EVN;
 
     if (!customerCode || amount === null) {
       skipped++;
@@ -115,7 +149,7 @@ async function main() {
     if (existing) {
       await ElectricBillRecord.updateOne(
         { _id: existing._id },
-        { $set: { periods: newPeriods } }
+        { $set: { periods: newPeriods, evn } }
       );
       updated++;
     } else {
@@ -125,15 +159,15 @@ async function main() {
         month: MONTH,
         monthLabel: `T${MONTH}/${YEAR}`,
         company: COMPANY,
-        evn: EVN,
+        evn,
         periods: newPeriods,
       });
       created++;
     }
 
-    const deadline = deadlineIso ? String(rawC ?? "").trim() : "—";
+    const deadline = deadlineIso ? String(rawDeadline ?? "").trim() : "—";
     console.log(
-      `  [${existing ? "UPD" : "NEW"}] ${customerCode}  ${amount.toLocaleString("vi-VN")} đ  hạn: ${deadline}`
+      `  [${existing ? "UPD" : "NEW"}] ${customerCode}  ${amount.toLocaleString("vi-VN")} đ  EVN: ${evn}  hạn: ${deadline}`
     );
   }
 
