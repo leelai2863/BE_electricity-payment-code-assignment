@@ -1,5 +1,5 @@
 //xu ly logic nghiep vu lien quan den agency o day
-//nhan du lieu tho, kiem tra dieu kien, goi repository tuong ung, tra ve ket qua
+//nhan du lieu tho, kiem tra dieu kien, goi repository tuong ung
 import { 
   createAgency, 
   deleteAgency, 

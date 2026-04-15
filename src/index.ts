@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import agenciesRouter from "@/modules/agencies/agencies.router";
 import billingScanRouter from "@/modules/billing-scan/billing-scan.router";
+import checkbillIngestRouter from "@/modules/checkbill-ingest/checkbill-ingest.router";
 import electricBillsRouter from "@/modules/electric-bills/electric-bills.router";
 import vouchersRouter from "@/modules/vouchers/vouchers.router";
 import customerAccountsRouter from "@/modules/customer-accounts/customer-accounts.router";
@@ -16,6 +17,7 @@ app.use(express.json({ limit: "50mb" }));
 
 app.use("/api/agencies", agenciesRouter);
 app.use("/api/billing-scan", billingScanRouter);
+app.use("/api/checkbill", checkbillIngestRouter);
 app.use("/api/electric-bills", electricBillsRouter);
 app.use("/api/vouchers", vouchersRouter);
 app.use("/api/customer-accounts", customerAccountsRouter);
