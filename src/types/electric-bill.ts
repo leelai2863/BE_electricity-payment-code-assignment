@@ -70,5 +70,7 @@ export type MailQueueLineDto = {
   ca: CaSlot | null;
   dlGiaoName: string | null;
   customerName: string | null;
+  /** Ngày thanh toán nhập trên Danh sách hóa đơn (dd/mm), theo kỳ — không dùng dealCompletedAt */
+  scanDdMm: string | null;
   dealCompletedAt: string;
 };

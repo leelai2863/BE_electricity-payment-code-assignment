@@ -581,6 +581,7 @@ router.get("/mail-queue", async (_req: Request, res: Response) => {
           ca: p.ca,
           dlGiaoName: p.dlGiaoName,
           customerName: p.customerName,
+          scanDdMm: p.scanDdMm,
           dealCompletedAt: p.dealCompletedAt,
         });
       }
