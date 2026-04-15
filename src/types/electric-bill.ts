@@ -56,11 +56,32 @@ export type AgencyOption = {
   code: string;
 };
 
+export type RefundFeeRuleDto = {
+  _id: string;
+  agencyName: string;
+  statusLabel: string;
+  pct: number;
+  effectiveFrom: string;
+};
+
+export type RefundLineStateDto = {
+  billId: string;
+  ky: 1 | 2 | 3;
+  agencyName: string;
+  status: string;
+  phiPct: number | null;
+  daHoan: number;
+  updatedAt: string;
+};
+
 /** Một dòng đã hoàn tất (theo kỳ) cho trang Đi mail / Hoàn tiền */
 export type MailQueueLineDto = {
   billId: string;
   customerCode: string;
   monthLabel: string;
+  /** Tháng hóa đơn (1–12) — neo ngày cho mức phí hoàn tiền */
+  month: number;
+  year: number;
   evn: string;
   company: string;
   ky: 1 | 2 | 3;
