@@ -63,13 +63,39 @@ export const BillingScanService = {
       completedAtRaw instanceof Date && !Number.isNaN(completedAtRaw.getTime())
         ? completedAtRaw
         : new Date();
+    const year = completedAt.getUTCFullYear();
+    const month = completedAt.getUTCMonth() + 1;
+    const customerCode = String(r.maKh ?? "").trim();
+    const amount = Math.round(Number(r.soTienVnd ?? 0));
+
+    const alreadyInAssigned = await BillingScanRepository.existsElectricBillAmountInMonth(
+      customerCode,
+      amount,
+      year,
+      month
+    );
+    if (alreadyInAssigned) {
+      await BillingScanRepository.deleteChargesStagingById(stagingId);
+      return {
+        status: 200 as const,
+        payload: {
+          ok: true,
+          data: {
+            stagingId,
+            customerCode,
+            skipped: true,
+            reason: "duplicate_with_assigned_table",
+          },
+        },
+      };
+    }
 
     await upsertBillFromChargeItem(
       {
         nguon: String(r.nguon ?? ""),
-        maKh: String(r.maKh ?? ""),
+        maKh: customerCode,
         soTienDisplay: String(r.soTienDisplay ?? ""),
-        soTienVnd: Number(r.soTienVnd ?? 0),
+        soTienVnd: amount,
         tenKh: String(r.tenKh ?? ""),
       },
       completedAt
@@ -83,7 +109,7 @@ export const BillingScanService = {
         ok: true,
         data: {
           stagingId,
-          customerCode: String(r.maKh ?? ""),
+          customerCode,
         },
       },
     };
@@ -128,17 +154,6 @@ export const BillingScanService = {
           failed: ids.length - approved,
           errors,
         },
-      },
-    };
-  },
-
-  async seedLocalMockScannedCodes() {
-    return {
-      status: 410 as const,
-      payload: {
-        ok: false,
-        error: "mock_seed_removed",
-        message: "Mock seed was intentionally removed in this branch.",
       },
     };
   },

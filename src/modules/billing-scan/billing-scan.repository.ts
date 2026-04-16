@@ -1,6 +1,7 @@
 import { connectDB } from "@/lib/mongodb";
 import { BillingScanHistory } from "@/models/BillingScanHistory";
 import { ChargesStagingRow } from "@/models/ChargesStagingRow";
+import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 
 export const BillingScanRepository = {
   async findHistory(limit = 500) {
@@ -27,5 +28,18 @@ export const BillingScanRepository = {
   async deleteChargesStagingById(id: string) {
     await connectDB();
     return await ChargesStagingRow.deleteOne({ _id: id });
+  },
+
+  async existsElectricBillAmountInMonth(customerCode: string, amount: number, year: number, month: number) {
+    await connectDB();
+    const doc = await ElectricBillRecord.findOne({
+      customerCode,
+      year,
+      month,
+      periods: { $elemMatch: { amount } },
+    })
+      .select({ _id: 1 })
+      .lean();
+    return Boolean(doc);
   },
 };
