@@ -53,7 +53,7 @@ export function serializeElectricBill(doc: ElectricBillRecordDocument | Record<s
     const p = periodsRaw.find((x) => Number(x.ky) === ky);
     const scanIso = iso(p?.scanDate as Date | undefined);
     const rawDd = p?.scanDdMm != null ? String(p.scanDdMm).trim() : "";
-    /** Chỉ dùng giá trị lưu; không đồng bộ từ scanDate (người dùng / hệ thống tự nhập dd/mm). */
+
     const scanDdMm = rawDd || null;
 
     const pid = p?.assignedAgencyId != null && String(p.assignedAgencyId).trim() ? String(p.assignedAgencyId) : null;
@@ -68,7 +68,7 @@ export function serializeElectricBill(doc: ElectricBillRecordDocument | Record<s
       scanDate: scanIso,
       scanDdMm,
       ca: normalizeCa(p?.ca),
-      /** Mỗi kỳ được lập — không fallback bill / kỳ khác */
+
       assignedAgencyId: pid,
       assignedAgencyName: pname,
       dlGiaoName: p?.dlGiaoName != null && String(p.dlGiaoName).trim() ? String(p.dlGiaoName) : null,
@@ -77,7 +77,7 @@ export function serializeElectricBill(doc: ElectricBillRecordDocument | Record<s
       customerName:
         p?.customerName != null && String(p.customerName).trim() ? String(p.customerName) : null,
       cardType: p?.cardType != null && String(p.cardType).trim() ? String(p.cardType) : null,
-      /** Hồ sơ cũ: dealCompletedAt cấp bill chỉ gần kỳ 1 */
+
       dealCompletedAt: periodDeal ?? (ky === 1 ? legacyBillDeal : null),
     };
   });
@@ -102,7 +102,7 @@ export function serializeElectricBill(doc: ElectricBillRecordDocument | Record<s
   };
 }
 
-/** Còn ít nhất một kỳ có cước chưa hoàn tất ✅ */
+
 export function billHasIncompletePeriod(dto: ElectricBillDto): boolean {
   return dto.periods.some((p) => p.amount != null && !p.dealCompletedAt);
 }

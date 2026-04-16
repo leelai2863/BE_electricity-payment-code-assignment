@@ -1,6 +1,6 @@
 import { connectDB } from "@/lib/mongodb";
 import { BillingScanHistory } from "@/models/BillingScanHistory";
-import { ElectricBillRecord } from "@/models/ElectricBillRecord";
+import { ChargesStagingRow } from "@/models/ChargesStagingRow";
 
 export const BillingScanRepository = {
   async findHistory(limit = 500) {
@@ -11,11 +11,21 @@ export const BillingScanRepository = {
       .lean();
   },
 
-  async findIncompleteVGreenBills() {
+  async findChargesStagingPending(limit = 10_000) {
     await connectDB();
-    return await ElectricBillRecord.find({
-      company: "V-GREEN",
-      $or: [{ dealCompletedAt: null }, { dealCompletedAt: { $exists: false } }],
-    }).lean();
-  }
+    return await ChargesStagingRow.find()
+      .sort({ receivedAt: -1 })
+      .limit(limit)
+      .lean();
+  },
+
+  async findChargesStagingById(id: string) {
+    await connectDB();
+    return await ChargesStagingRow.findById(id).lean();
+  },
+
+  async deleteChargesStagingById(id: string) {
+    await connectDB();
+    return await ChargesStagingRow.deleteOne({ _id: id });
+  },
 };

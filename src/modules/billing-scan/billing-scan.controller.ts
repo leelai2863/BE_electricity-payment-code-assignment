@@ -28,5 +28,16 @@ export const BillingScanController = {
       const message = e instanceof Error ? e.message : "Không đọc được MongoDB";
       res.status(503).json({ error: message, data: [] });
     }
-  }
+  },
+
+  async approveScannedCode(req: Request, res: Response) {
+    try {
+      const id = String(req.params.id ?? "");
+      const result = await BillingScanService.approveScannedCode(id);
+      res.status(result.status).json(result.payload);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Duyệt thất bại";
+      res.status(500).json({ error: message });
+    }
+  },
 };
