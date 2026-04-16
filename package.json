@@ -6,8 +6,6 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc --noEmit",
-    "seed:vgreen": "tsx scripts/seed-vgreen-electric-bills.ts",
-    "seed:vouchers": "tsx scripts/seed-voucher-codes.ts",
     "seed:billing": "tsx scripts/import-billing-from-xlsx.ts",
     "docker:restore-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-seed-to-docker.ps1",
     "docker:prod:up": "docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build",
