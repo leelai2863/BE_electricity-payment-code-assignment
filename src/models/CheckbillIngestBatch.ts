@@ -28,6 +28,12 @@ const CheckbillIngestBatchSchema = new Schema(
     totalAmountVnd: { type: Number, default: 0 },
     itemsDeltaTruncated: { type: Boolean, default: false },
     downloadExcelUrl: { type: String, default: null },
+    /** True when POST items were truncated (tool-check-bill contract). */
+    itemsTruncated: { type: Boolean, default: false },
+    /** Row count before dedupe, after optional full JSON fetch. */
+    rawRowCount: { type: Number, default: 0 },
+    dedupeUniqueCount: { type: Number, default: 0 },
+    dedupeDuplicateCount: { type: Number, default: 0 },
     items: { type: [CheckbillIngestItemSchema], default: [] },
     processStatus: {
       type: String,
