@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import type { Request, Response, NextFunction } from "express";
 import agenciesRouter from "@/modules/agencies/agencies.router";
 import billingScanRouter from "@/modules/billing-scan/billing-scan.router";
 import checkbillIngestRouter from "@/modules/checkbill-ingest/checkbill-ingest.router";
@@ -15,6 +16,16 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "http://localhost:3000";
 
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json({ limit: "50mb" }));
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const startedAt = Date.now();
+  res.on("finish", () => {
+    const elapsedMs = Date.now() - startedAt;
+    const ip = req.ip || req.socket.remoteAddress || "-";
+    // Concise access log for all requests (curl, browser, services).
+    console.log(`[REQ] ${req.method} ${req.originalUrl} -> ${res.statusCode} ${elapsedMs}ms ip=${ip}`);
+  });
+  next();
+});
 
 app.use("/api/agencies", agenciesRouter);
 app.use("/api/billing-scan", billingScanRouter);
