@@ -160,6 +160,26 @@ function dedupeItems(items: ChargeIngestItem[]): {
   return { unique, duplicateCount: items.length - unique.length };
 }
 
+async function filterExistingFromStaging(items: ChargeIngestItem[]): Promise<{
+  fresh: ChargeIngestItem[];
+  duplicateExistingCount: number;
+}> {
+  if (items.length === 0) return { fresh: [], duplicateExistingCount: 0 };
+  const hashes = [...new Set(items.map((it) => chargeDedupeKey(it.maKh, it.soTienVnd)))];
+  const existing = await ChargesStagingRow.find({
+    dedupeHash: { $in: hashes },
+  })
+    .select({ dedupeHash: 1, _id: 0 })
+    .lean();
+  const existingSet = new Set(existing.map((x) => String((x as { dedupeHash?: unknown }).dedupeHash ?? "")));
+  if (existingSet.size === 0) return { fresh: items, duplicateExistingCount: 0 };
+  const fresh = items.filter((it) => !existingSet.has(chargeDedupeKey(it.maKh, it.soTienVnd)));
+  return {
+    fresh,
+    duplicateExistingCount: items.length - fresh.length,
+  };
+}
+
 async function notifyGatewayIngestReceived(data: {
   batchId: string;
   jobId: string;
@@ -247,6 +267,8 @@ export async function ingestChargesSnapshot(
 
   const rawRowCount = rawRows.length;
   const { unique, duplicateCount } = dedupeItems(rawRows);
+  const { fresh, duplicateExistingCount } = await filterExistingFromStaging(unique);
+  const totalDuplicateDropped = duplicateCount + duplicateExistingCount;
 
   const snapshotId = typeof snap.snapshot_id === "number" ? snap.snapshot_id : null;
 
@@ -290,25 +312,25 @@ export async function ingestChargesSnapshot(
     jobStatus: String(body.job_status ?? "").trim() || null,
     completedAt,
     comparison: String(snap.comparison ?? "").trim() || null,
-    deltaRowCount: Number(snap.delta_row_count ?? unique.length) || unique.length,
+    deltaRowCount: Number(snap.delta_row_count ?? fresh.length) || fresh.length,
     snapshotRowCount: Number(snap.snapshot_row_count ?? rawRowCount) || rawRowCount,
     deltaTotalAmountVnd: Number(snap.delta_total_amount_vnd ?? 0) || 0,
     totalAmountVnd: Number(snap.total_amount_vnd ?? 0) || 0,
     itemsDeltaTruncated: Boolean(snap.items_delta_truncated),
     itemsTruncated: itemsTruncatedForStore,
     rawRowCount,
-    dedupeUniqueCount: unique.length,
-    dedupeDuplicateCount: duplicateCount,
-    items: unique,
+    dedupeUniqueCount: fresh.length,
+    dedupeDuplicateCount: totalDuplicateDropped,
+    items: fresh,
     processStatus: "received",
     receivedAt: now,
   });
 
   const batchOid = doc._id as mongoose.Types.ObjectId;
 
-  if (unique.length > 0) {
+  if (fresh.length > 0) {
     await ChargesStagingRow.insertMany(
-      unique.map((it) => ({
+      fresh.map((it) => ({
         dedupeHash: chargeDedupeKey(it.maKh, it.soTienVnd),
         nguon: it.nguon,
         maKh: it.maKh,
@@ -330,7 +352,7 @@ export async function ingestChargesSnapshot(
     snapshotId,
     receivedAt: now.toISOString(),
     completedAt: completedAt.toISOString(),
-    itemsAccepted: unique.length,
+    itemsAccepted: fresh.length,
   });
 
   return {
@@ -342,9 +364,9 @@ export async function ingestChargesSnapshot(
         jobId,
         snapshotId,
         receivedAt: now.toISOString(),
-        itemsAccepted: unique.length,
+        itemsAccepted: fresh.length,
         rawRowCount,
-        duplicateRowsDropped: duplicateCount,
+        duplicateRowsDropped: totalDuplicateDropped,
         fullFetch: usedFetch,
       },
     },
