@@ -7,6 +7,7 @@ import checkbillIngestRouter from "@/modules/checkbill-ingest/checkbill-ingest.r
 import electricBillsRouter from "@/modules/electric-bills/electric-bills.router";
 import vouchersRouter from "@/modules/vouchers/vouchers.router";
 import customerAccountsRouter from "@/modules/customer-accounts/customer-accounts.router";
+import devToolsRouter from "@/modules/dev-tools/dev-tools.router";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -21,6 +22,7 @@ app.use("/api/checkbill", checkbillIngestRouter);
 app.use("/api/electric-bills", electricBillsRouter);
 app.use("/api/vouchers", vouchersRouter);
 app.use("/api/customer-accounts", customerAccountsRouter);
+app.use("/api/dev-tools", devToolsRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
