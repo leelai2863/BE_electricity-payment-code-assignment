@@ -93,12 +93,14 @@ jobs:
           GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           HEALTH_PORT: ${{ secrets.HEALTH_CHECK_PORT }}
+          REPO_SLUG: ${{ github.repository }}
+          GIT_PULL_TOKEN: ${{ secrets.GIT_PULL_TOKEN }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
-          envs: REGISTRY_BASE,IMAGE_TAG,DEPLOY_PATH,GHCR_PULL_USERNAME,GHCR_PULL_TOKEN,HEALTH_PORT
+          envs: REGISTRY_BASE,IMAGE_TAG,DEPLOY_PATH,GHCR_PULL_USERNAME,GHCR_PULL_TOKEN,HEALTH_PORT,REPO_SLUG,GIT_PULL_TOKEN
           script_stop: true
           script: |
             set -euo pipefail
@@ -107,7 +109,11 @@ jobs:
             docker compose version >/dev/null
 
             if [ -d ".git" ]; then
-              git fetch --all --prune
+              # Repo private + origin HTTPS: cần PAT (secret GIT_PULL_TOKEN) hoặc đổi origin sang SSH trên server.
+              if [ -n "${GIT_PULL_TOKEN:-}" ]; then
+                git remote set-url origin "https://x-access-token:${GIT_PULL_TOKEN}@github.com/${REPO_SLUG}.git"
+              fi
+              git fetch origin
               git checkout main
               git pull --ff-only origin main
             else

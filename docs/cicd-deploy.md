@@ -28,6 +28,7 @@ Các secret sau đã được thiết kế để khớp workflow; khi đủ là 
 | `GHCR_PULL_USERNAME` | Cùng | Thường là username GitHub (kéo image private) |
 | `GHCR_PULL_TOKEN` | Cùng | PAT có `read:packages` (và `write:packages` nếu policy yêu cầu) |
 | `HEALTH_CHECK_PORT` | Cùng | **Phải trùng cổng host backend** — tức cùng giá trị với `BACKEND_HOST_PORT` trong `.env` trên server (mặc định compose `1389`). Script dùng biến này cho `curl http://127.0.0.1:$PORT/health` sau deploy/rollback |
+| `GIT_PULL_TOKEN` | **Khuyến nghị nếu repo private** | Classic PAT: quyền **`repo`** (đọc code để `git pull`). Workflow gán tạm `origin` dạng `https://x-access-token:...@github.com/<repo>.git` trên server. Có thể dùng cùng một PAT với quyền `read:packages` nếu bạn gộp scope. Repo **public** có thể bỏ qua nếu `git pull` không cần login. |
 
 ---
 
