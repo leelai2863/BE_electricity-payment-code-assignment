@@ -62,15 +62,11 @@ backend/
 │   │   ├── openai-vision.ts      # OCR ảnh CCCD/hóa đơn qua OpenAI
 │   │   ├── audit.ts              # Ghi AuditLog
 │   │   └── format-vnd.ts         # Format số tiền VND
-│   ├── data/
-│   │   └── vgreen-scanned-batch.ts  # Dữ liệu hardcode dùng cho seed:vgreen
 │   └── types/
 │       ├── electric-bill.ts      # DTO types
 │       └── voucher.ts            # VoucherRow type
 ├── scripts/
 │   ├── import-billing-from-xlsx.ts   # ★ Import Excel → electricbillrecords
-│   ├── seed-vgreen-electric-bills.ts # Seed hardcode V-GREEN T3/2026
-│   ├── seed-voucher-codes.ts         # Seed VoucherCode từ VGREEN_SCANNED_BATCH
 │   └── restore-mongo-seed-to-docker.ps1  # Restore mongodump vào Docker
 ├── mongo-seed/                   # Dữ liệu khởi tạo MongoDB lần đầu (init scripts)
 ├── docker-compose.yml            # Dev: Mongo publish cổng host (27018)
@@ -262,22 +258,6 @@ BILLING_XLSX_PATH=./maHĐ.xlsx npm run seed:billing
 
 Sau khi chạy xong → F5 trang Quét cước trên UI sẽ thấy dữ liệu.
 
-### 7.2 Seed dữ liệu hardcode V-GREEN T3/2026
-
-```bash
-npm run seed:vgreen
-```
-
-Đọc từ `src/data/vgreen-scanned-batch.ts` (20 mã hardcode), upsert vào `electricbillrecords`.
-
-### 7.3 Seed VoucherCode từ VGREEN_SCANNED_BATCH
-
-```bash
-npm run seed:vouchers
-```
-
-Tạo bản ghi `VoucherCode` (collection `vouchercodes`) với `status: 1` (đã quét, có bill) cho mỗi mã trong `VGREEN_SCANNED_BATCH`.
-
 ---
 
 ## 8. Cấu trúc cơ sở dữ liệu (MongoDB)
@@ -449,7 +429,7 @@ Khi một kỳ hoàn tất → xuất hiện trong `GET /api/electric-bills/mail
 
 ```
 Status 0 (Chờ quét)
-     ↓ seed:vouchers hoặc seed:vgreen
+     ↓ Import dữ liệu thực tế (Excel/API) vào MongoDB
 Status 1 (Đã quét, có bill)
      ↓ Đại lý upload ảnh CCCD/hóa đơn + OCR
 Status 2 (Chờ duyệt)
@@ -487,8 +467,6 @@ Script dùng `mongorestore --drop` — sẽ **ghi đè** collection hiện có.
 | `npm run dev` | Chạy dev server với hot-reload |
 | `npm run build` | TypeScript type-check |
 | `npm run seed:billing -- ./file.xlsx` | **Import Excel cước → electricbillrecords** |
-| `npm run seed:vgreen` | Seed hardcode V-GREEN T3/2026 |
-| `npm run seed:vouchers` | Seed VoucherCode từ VGREEN_SCANNED_BATCH |
 | `npm run docker:restore-mongo-seed` | Restore mongodump vào Docker Mongo |
 | `npm run docker:prod:up` | Production: `docker compose -f docker-compose.prod.yml` (biến trong `.env`) |
 | `npm run docker:prod:down` | Dừng stack production |
