@@ -47,8 +47,8 @@ app.listen(PORT, () => {
   if (shouldAutoSeed) {
     void BillingScanService.seedLocalMockScannedCodes()
       .then((result) => {
-        if (result.status === 200) {
-          console.log(`[MOCK] Billing scan local seed done: ${(result.payload as { data?: { seeded?: number } })?.data?.seeded ?? 0} rows`);
+        if (result.status === 410) {
+          console.log(`[MOCK] Billing scan local seed skipped: ${JSON.stringify(result.payload)}`);
           return;
         }
         console.log(`[MOCK] Billing scan local seed skipped: ${JSON.stringify(result.payload)}`);
