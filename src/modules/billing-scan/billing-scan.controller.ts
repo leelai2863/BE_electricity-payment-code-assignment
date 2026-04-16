@@ -52,14 +52,4 @@ export const BillingScanController = {
       res.status(500).json({ error: message });
     }
   },
-
-  async seedLocalMock(req: Request, res: Response) {
-    try {
-      const result = await BillingScanService.seedLocalMockScannedCodes();
-      res.status(result.status).json(result.payload);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Seed mock dữ liệu thất bại";
-      res.status(500).json({ ok: false, error: message });
-    }
-  },
 };

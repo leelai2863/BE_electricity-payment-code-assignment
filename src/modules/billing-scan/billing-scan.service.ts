@@ -1,11 +1,7 @@
 import mongoose from "mongoose";
-import { chargeDedupeKey, upsertBillFromChargeItem } from "@/lib/checkbill-charge-upsert";
+import { upsertBillFromChargeItem } from "@/lib/checkbill-charge-upsert";
 import { BillingScanRepository } from "./billing-scan.repository";
 import { serializeHistory } from "@/lib/electric-bill-serialize";
-import { connectDB } from "@/lib/mongodb";
-import { CheckbillIngestBatch } from "@/models/CheckbillIngestBatch";
-import { ChargesStagingRow } from "@/models/ChargesStagingRow";
-import { getLocalBillingScanMockItems } from "./billing-scan.local-mock";
 
 export type ChargesStagingRowSerialized = {
   _id: string;
@@ -67,13 +63,39 @@ export const BillingScanService = {
       completedAtRaw instanceof Date && !Number.isNaN(completedAtRaw.getTime())
         ? completedAtRaw
         : new Date();
+    const year = completedAt.getUTCFullYear();
+    const month = completedAt.getUTCMonth() + 1;
+    const customerCode = String(r.maKh ?? "").trim();
+    const amount = Math.round(Number(r.soTienVnd ?? 0));
+
+    const alreadyInAssigned = await BillingScanRepository.existsElectricBillAmountInMonth(
+      customerCode,
+      amount,
+      year,
+      month
+    );
+    if (alreadyInAssigned) {
+      await BillingScanRepository.deleteChargesStagingById(stagingId);
+      return {
+        status: 200 as const,
+        payload: {
+          ok: true,
+          data: {
+            stagingId,
+            customerCode,
+            skipped: true,
+            reason: "duplicate_with_assigned_table",
+          },
+        },
+      };
+    }
 
     await upsertBillFromChargeItem(
       {
         nguon: String(r.nguon ?? ""),
-        maKh: String(r.maKh ?? ""),
+        maKh: customerCode,
         soTienDisplay: String(r.soTienDisplay ?? ""),
-        soTienVnd: Number(r.soTienVnd ?? 0),
+        soTienVnd: amount,
         tenKh: String(r.tenKh ?? ""),
       },
       completedAt
@@ -87,7 +109,7 @@ export const BillingScanService = {
         ok: true,
         data: {
           stagingId,
-          customerCode: String(r.maKh ?? ""),
+          customerCode,
         },
       },
     };
@@ -131,81 +153,6 @@ export const BillingScanService = {
           approved,
           failed: ids.length - approved,
           errors,
-        },
-      },
-    };
-  },
-
-  async seedLocalMockScannedCodes() {
-    const allowMock = String(process.env.BILLING_SCAN_LOCAL_MOCK_ENABLED ?? "").trim() === "1";
-    const nodeEnv = String(process.env.NODE_ENV ?? "").trim();
-    if (!allowMock || nodeEnv === "production") {
-      return {
-        status: 403 as const,
-        payload: {
-          ok: false,
-          error: "mock_seed_disabled",
-          message: "Set BILLING_SCAN_LOCAL_MOCK_ENABLED=1 (local only) to enable mock seed endpoint",
-        },
-      };
-    }
-
-    await connectDB();
-
-    const now = new Date();
-    const rows = getLocalBillingScanMockItems();
-    const jobId = `local-mock-billingscan-${now.getTime()}`;
-    const completedAt = now;
-    const snapshotId = null;
-
-    const batch = await CheckbillIngestBatch.create({
-      eventType: "checkbill.charges_snapshot",
-      eventAt: now,
-      projectId: "local-mock",
-      jobId,
-      snapshotId,
-      jobSource: "local",
-      jobStatus: "mocked",
-      completedAt,
-      comparison: "mock-seed",
-      deltaRowCount: rows.length,
-      snapshotRowCount: rows.length,
-      deltaTotalAmountVnd: rows.reduce((sum, x) => sum + x.soTienVnd, 0),
-      totalAmountVnd: rows.reduce((sum, x) => sum + x.soTienVnd, 0),
-      itemsDeltaTruncated: false,
-      itemsTruncated: false,
-      rawRowCount: rows.length,
-      dedupeUniqueCount: rows.length,
-      dedupeDuplicateCount: 0,
-      items: rows,
-      processStatus: "received",
-      receivedAt: now,
-    });
-
-    await ChargesStagingRow.insertMany(
-      rows.map((it) => ({
-        dedupeHash: chargeDedupeKey(it.maKh, it.soTienVnd),
-        nguon: it.nguon,
-        maKh: it.maKh,
-        soTienDisplay: it.soTienDisplay,
-        soTienVnd: it.soTienVnd,
-        tenKh: it.tenKh,
-        jobId,
-        snapshotId,
-        ingestBatchId: batch._id,
-        snapshotCompletedAt: completedAt,
-        receivedAt: now,
-      }))
-    );
-
-    return {
-      status: 200 as const,
-      payload: {
-        ok: true,
-        data: {
-          seeded: rows.length,
-          jobId,
-          ingestBatchId: String(batch._id),
         },
       },
     };

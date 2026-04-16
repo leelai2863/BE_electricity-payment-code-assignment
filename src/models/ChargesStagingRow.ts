@@ -2,7 +2,7 @@ import mongoose, { Schema, type InferSchemaType, type Model } from "mongoose";
 
 const ChargesStagingRowSchema = new Schema(
   {
-    dedupeHash: { type: String, required: true, trim: true, index: true },
+    dedupeHash: { type: String, required: true, trim: true, index: true, unique: true },
     nguon: { type: String, required: true, trim: true },
     maKh: { type: String, required: true, trim: true, index: true },
     soTienDisplay: { type: String, default: "" },
