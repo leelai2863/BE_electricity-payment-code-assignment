@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { connectDB } from "@/lib/mongodb";
 import { chargeDedupeKey, type ChargeIngestItem } from "@/lib/checkbill-charge-upsert";
+import { BillingScanHistory } from "@/models/BillingScanHistory";
 import { CheckbillIngestBatch } from "@/models/CheckbillIngestBatch";
 import { ChargesStagingRow } from "@/models/ChargesStagingRow";
 
@@ -160,24 +161,46 @@ function dedupeItems(items: ChargeIngestItem[]): {
   return { unique, duplicateCount: items.length - unique.length };
 }
 
-async function filterExistingFromStaging(items: ChargeIngestItem[]): Promise<{
-  fresh: ChargeIngestItem[];
-  duplicateExistingCount: number;
-}> {
-  if (items.length === 0) return { fresh: [], duplicateExistingCount: 0 };
-  const hashes = [...new Set(items.map((it) => chargeDedupeKey(it.maKh, it.soTienVnd)))];
-  const existing = await ChargesStagingRow.find({
-    dedupeHash: { $in: hashes },
+async function filterExistingFromApprovedHistory(
+  items: ChargeIngestItem[],
+  completedAt: Date
+): Promise<{ fresh: ChargeIngestItem[]; duplicateApprovedCount: number }> {
+  if (items.length === 0) return { fresh: [], duplicateApprovedCount: 0 };
+  if (!(completedAt instanceof Date) || Number.isNaN(completedAt.getTime())) {
+    return { fresh: items, duplicateApprovedCount: 0 };
+  }
+
+  const year = completedAt.getUTCFullYear();
+  const month = completedAt.getUTCMonth(); // 0-based
+  const start = new Date(Date.UTC(year, month, 1));
+  const end = new Date(Date.UTC(year, month + 1, 1));
+
+  const codes = [...new Set(items.map((it) => String(it.maKh ?? "").trim()).filter(Boolean))];
+  const amounts = [...new Set(items.map((it) => Math.round(Number(it.soTienVnd ?? 0))))];
+  if (codes.length === 0 || amounts.length === 0) return { fresh: items, duplicateApprovedCount: 0 };
+
+  const hist = await BillingScanHistory.find({
+    customerCode: { $in: codes },
+    amount: { $in: amounts },
+    scannedAt: { $gte: start, $lt: end },
+    status: "has_bill",
   })
-    .select({ dedupeHash: 1, _id: 0 })
+    .select({ customerCode: 1, amount: 1, _id: 0 })
     .lean();
-  const existingSet = new Set(existing.map((x) => String((x as { dedupeHash?: unknown }).dedupeHash ?? "")));
-  if (existingSet.size === 0) return { fresh: items, duplicateExistingCount: 0 };
-  const fresh = items.filter((it) => !existingSet.has(chargeDedupeKey(it.maKh, it.soTienVnd)));
-  return {
-    fresh,
-    duplicateExistingCount: items.length - fresh.length,
-  };
+
+  if (!hist || hist.length === 0) return { fresh: items, duplicateApprovedCount: 0 };
+
+  const seen = new Set(
+    hist.map((h) => `${String((h as { customerCode?: unknown }).customerCode ?? "").trim().toUpperCase()}|${Math.round(
+      Number((h as { amount?: unknown }).amount ?? 0)
+    )}`)
+  );
+
+  const fresh = items.filter((it) => {
+    const k = `${String(it.maKh ?? "").trim().toUpperCase()}|${Math.round(Number(it.soTienVnd ?? 0))}`;
+    return !seen.has(k);
+  });
+  return { fresh, duplicateApprovedCount: items.length - fresh.length };
 }
 
 async function notifyGatewayIngestReceived(data: {
@@ -267,8 +290,6 @@ export async function ingestChargesSnapshot(
 
   const rawRowCount = rawRows.length;
   const { unique, duplicateCount } = dedupeItems(rawRows);
-  const { fresh, duplicateExistingCount } = await filterExistingFromStaging(unique);
-  const totalDuplicateDropped = duplicateCount + duplicateExistingCount;
 
   const snapshotId = typeof snap.snapshot_id === "number" ? snap.snapshot_id : null;
 
@@ -301,8 +322,48 @@ export async function ingestChargesSnapshot(
   const now = new Date();
   const eventAt = toIsoDate(body.event_at, now);
   const completedAt = toIsoDate(snap.completed_at, eventAt);
+  const batchOid = new mongoose.Types.ObjectId();
+  let itemsAccepted = 0;
+  let duplicateExistingCount = 0;
+  let duplicateApprovedCount = 0;
+
+  const { fresh: freshAfterApproved, duplicateApprovedCount: dupApproved } =
+    await filterExistingFromApprovedHistory(unique, completedAt);
+  duplicateApprovedCount = dupApproved;
+
+  if (freshAfterApproved.length > 0) {
+    const bulkResult = await ChargesStagingRow.bulkWrite(
+      freshAfterApproved.map((it) => ({
+        updateOne: {
+          filter: { dedupeHash: chargeDedupeKey(it.maKh, it.soTienVnd) },
+          update: {
+            $setOnInsert: {
+              dedupeHash: chargeDedupeKey(it.maKh, it.soTienVnd),
+              nguon: it.nguon,
+              maKh: it.maKh,
+              soTienDisplay: it.soTienDisplay,
+              soTienVnd: it.soTienVnd,
+              tenKh: it.tenKh,
+              jobId,
+              snapshotId,
+              ingestBatchId: batchOid,
+              snapshotCompletedAt: completedAt,
+              receivedAt: now,
+            },
+          },
+          upsert: true,
+        },
+      })),
+      { ordered: false }
+    );
+    itemsAccepted = Number((bulkResult as { upsertedCount?: number }).upsertedCount ?? 0);
+    duplicateExistingCount = freshAfterApproved.length - itemsAccepted;
+  }
+
+  const totalDuplicateDropped = duplicateCount + duplicateApprovedCount + duplicateExistingCount;
 
   const doc = await CheckbillIngestBatch.create({
+    _id: batchOid,
     eventType,
     eventAt,
     projectId: String(body.project_id ?? "checkbill").trim(),
@@ -312,39 +373,19 @@ export async function ingestChargesSnapshot(
     jobStatus: String(body.job_status ?? "").trim() || null,
     completedAt,
     comparison: String(snap.comparison ?? "").trim() || null,
-    deltaRowCount: Number(snap.delta_row_count ?? fresh.length) || fresh.length,
+    deltaRowCount: Number(snap.delta_row_count ?? itemsAccepted) || itemsAccepted,
     snapshotRowCount: Number(snap.snapshot_row_count ?? rawRowCount) || rawRowCount,
     deltaTotalAmountVnd: Number(snap.delta_total_amount_vnd ?? 0) || 0,
     totalAmountVnd: Number(snap.total_amount_vnd ?? 0) || 0,
     itemsDeltaTruncated: Boolean(snap.items_delta_truncated),
     itemsTruncated: itemsTruncatedForStore,
     rawRowCount,
-    dedupeUniqueCount: fresh.length,
+    dedupeUniqueCount: itemsAccepted,
     dedupeDuplicateCount: totalDuplicateDropped,
-    items: fresh,
+    items: unique,
     processStatus: "received",
     receivedAt: now,
   });
-
-  const batchOid = doc._id as mongoose.Types.ObjectId;
-
-  if (fresh.length > 0) {
-    await ChargesStagingRow.insertMany(
-      fresh.map((it) => ({
-        dedupeHash: chargeDedupeKey(it.maKh, it.soTienVnd),
-        nguon: it.nguon,
-        maKh: it.maKh,
-        soTienDisplay: it.soTienDisplay,
-        soTienVnd: it.soTienVnd,
-        tenKh: it.tenKh,
-        jobId,
-        snapshotId,
-        ingestBatchId: batchOid,
-        snapshotCompletedAt: completedAt,
-        receivedAt: now,
-      }))
-    );
-  }
 
   void notifyGatewayIngestReceived({
     batchId: String(doc._id),
@@ -352,7 +393,7 @@ export async function ingestChargesSnapshot(
     snapshotId,
     receivedAt: now.toISOString(),
     completedAt: completedAt.toISOString(),
-    itemsAccepted: fresh.length,
+    itemsAccepted,
   });
 
   return {
@@ -364,7 +405,7 @@ export async function ingestChargesSnapshot(
         jobId,
         snapshotId,
         receivedAt: now.toISOString(),
-        itemsAccepted: fresh.length,
+        itemsAccepted,
         rawRowCount,
         duplicateRowsDropped: totalDuplicateDropped,
         fullFetch: usedFetch,

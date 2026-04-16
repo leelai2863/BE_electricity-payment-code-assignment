@@ -155,8 +155,8 @@ export const BillingScanService = {
     const now = new Date();
     const rows = getLocalBillingScanMockItems();
     const jobId = `local-mock-billingscan-${now.getTime()}`;
-    const snapshotId = null;
     const completedAt = now;
+    const snapshotId = null;
 
     const batch = await CheckbillIngestBatch.create({
       eventType: "checkbill.charges_snapshot",
