@@ -9,6 +9,7 @@ import electricBillsRouter from "@/modules/electric-bills/electric-bills.router"
 import vouchersRouter from "@/modules/vouchers/vouchers.router";
 import customerAccountsRouter from "@/modules/customer-accounts/customer-accounts.router";
 import devToolsRouter from "@/modules/dev-tools/dev-tools.router";
+import { BillingScanService } from "@/modules/billing-scan/billing-scan.service";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -41,4 +42,20 @@ app.get("/health", (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
+
+  const shouldAutoSeed = String(process.env.BILLING_SCAN_LOCAL_MOCK_AUTO_SEED ?? "").trim() === "1";
+  if (shouldAutoSeed) {
+    void BillingScanService.seedLocalMockScannedCodes()
+      .then((result) => {
+        if (result.status === 200) {
+          console.log(`[MOCK] Billing scan local seed done: ${(result.payload as { data?: { seeded?: number } })?.data?.seeded ?? 0} rows`);
+          return;
+        }
+        console.log(`[MOCK] Billing scan local seed skipped: ${JSON.stringify(result.payload)}`);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "unknown_error";
+        console.error(`[MOCK] Billing scan local seed failed: ${message}`);
+      });
+  }
 });
