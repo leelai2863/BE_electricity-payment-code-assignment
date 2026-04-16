@@ -1,8 +1,11 @@
 node_modules
 dist
-build
-coverage
-.env
-*.log
 .git
-.gitignore
+.github
+*.md
+.env
+.env.*
+coverage
+*.log
+deploy
+mongo-seed/dump

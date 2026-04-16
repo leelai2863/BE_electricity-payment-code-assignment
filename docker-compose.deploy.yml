@@ -1,0 +1,50 @@
+# Production / staging: chỉ PULL image backend từ GHCR (build trong GitHub Actions).
+# Mongo vẫn dùng image công khai docker.io — không build trên server.
+#
+# Trên server (cùng thư mục với file này), tạo `.env` với biến runtime (không commit).
+# Khi deploy từ Actions, export trước khi compose:
+#   REGISTRY_BASE=ghcr.io/<owner-thường>/assign-refu-manager-service
+#   IMAGE_TAG=<full-git-sha>
+#
+# Ví dụ:
+#   export REGISTRY_BASE=ghcr.io/trung-nam-2512/assign-refu-manager-service
+#   export IMAGE_TAG=abc123...
+#   echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_PULL_USERNAME" --password-stdin
+#   docker compose -f docker-compose.deploy.yml pull
+#   docker compose -f docker-compose.deploy.yml up -d --remove-orphans
+
+services:
+  backend:
+    image: ${REGISTRY_BASE}:${IMAGE_TAG}
+    container_name: giaodich-backend
+    ports:
+      - "${BACKEND_HOST_PORT:-1389}:3001"
+    env_file:
+      - .env
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/giaodich_voucher
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_VISION_MODEL=${OPENAI_VISION_MODEL:-gpt-4o-mini}
+      - OPENAI_TEXT_MODEL=${OPENAI_TEXT_MODEL:-gpt-4o-mini}
+      - PORT=3001
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: giaodich-mongo
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo-seed:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

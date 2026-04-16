@@ -27,6 +27,7 @@ const CheckbillIngestBatchSchema = new Schema(
     deltaTotalAmountVnd: { type: Number, default: 0 },
     totalAmountVnd: { type: Number, default: 0 },
     itemsDeltaTruncated: { type: Boolean, default: false },
+    downloadExcelUrl: { type: String, default: null },
     items: { type: [CheckbillIngestItemSchema], default: [] },
     processStatus: {
       type: String,
