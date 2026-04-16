@@ -60,7 +60,7 @@ jobs:
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           HEALTH_PORT: ${{ secrets.HEALTH_CHECK_PORT }}
           REPO_SLUG: ${{ github.repository }}
-          GIT_PULL_TOKEN: ${{ secrets.GIT_PULL_TOKEN }}
+          GIT_PULL_TOKEN: ${{ secrets.GIT_PULL_TOKEN || github.token }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -71,7 +71,7 @@ jobs:
           script: |
             set -euo pipefail
             cd "$DEPLOY_PATH"
-            if [ -d ".git" ] && [ -n "${GIT_PULL_TOKEN:-}" ]; then
+            if [ -d ".git" ]; then
               git remote set-url origin "https://x-access-token:${GIT_PULL_TOKEN}@github.com/${REPO_SLUG}.git"
             fi
             if [ -n "${GHCR_PULL_TOKEN:-}" ] && [ -n "${GHCR_PULL_USERNAME:-}" ]; then

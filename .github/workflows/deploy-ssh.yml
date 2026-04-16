@@ -94,7 +94,8 @@ jobs:
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           HEALTH_PORT: ${{ secrets.HEALTH_CHECK_PORT }}
           REPO_SLUG: ${{ github.repository }}
-          GIT_PULL_TOKEN: ${{ secrets.GIT_PULL_TOKEN }}
+          # Repo private: cần token. Ưu tiên PAT (GIT_PULL_TOKEN); không có thì dùng GITHUB_TOKEN của job (chỉ sống trong workflow).
+          GIT_PULL_TOKEN: ${{ secrets.GIT_PULL_TOKEN || github.token }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -109,10 +110,8 @@ jobs:
             docker compose version >/dev/null
 
             if [ -d ".git" ]; then
-              # Repo private + origin HTTPS: cần PAT (secret GIT_PULL_TOKEN) hoặc đổi origin sang SSH trên server.
-              if [ -n "${GIT_PULL_TOKEN:-}" ]; then
-                git remote set-url origin "https://x-access-token:${GIT_PULL_TOKEN}@github.com/${REPO_SLUG}.git"
-              fi
+              # Luôn gán origin có token (PAT hoặc GITHUB_TOKEN) để git fetch/pull repo private qua HTTPS.
+              git remote set-url origin "https://x-access-token:${GIT_PULL_TOKEN}@github.com/${REPO_SLUG}.git"
               git fetch origin
               git checkout main
               git pull --ff-only origin main
