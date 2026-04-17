@@ -92,20 +92,53 @@ export async function findRefundLineStates() {
   return RefundLineState.find({}).limit(15000).lean();
 }
 
-export async function findRefundFeeRules() {
-  return RefundFeeRule.find({})
-    .sort({ agencyName: 1, statusLabel: 1, effectiveFrom: -1 })
-    .limit(5000)
+export async function findRefundFeeRules(filter: Record<string, unknown> = {}) {
+  return RefundFeeRule.find(filter)
+    .sort({ agencyName: 1, effectiveFrom: -1, createdAt: -1 })
+    .limit(10000)
     .lean();
 }
 
 export async function createRefundFeeRuleDoc(data: {
   agencyName: string;
+  feeName?: string;
   statusLabel: string;
+  conditionType?: "amount" | "cardType" | "manual";
+  amountMin?: number | null;
+  amountMax?: number | null;
+  cardType?: string | null;
   pct: number;
   effectiveFrom: Date;
+  effectiveTo?: Date | null;
+  isActive?: boolean;
 }) {
   return RefundFeeRule.create(data);
+}
+
+export async function findRefundFeeRuleById(id: string) {
+  return RefundFeeRule.findById(id).exec();
+}
+
+export async function updateRefundFeeRuleById(
+  id: string,
+  data: {
+    feeName?: string;
+    statusLabel?: string;
+    conditionType?: "amount" | "cardType" | "manual";
+    amountMin?: number | null;
+    amountMax?: number | null;
+    cardType?: string | null;
+    pct?: number;
+    effectiveFrom?: Date;
+    effectiveTo?: Date | null;
+    isActive?: boolean;
+  }
+) {
+  return RefundFeeRule.findByIdAndUpdate(id, { $set: data }, { new: true }).exec();
+}
+
+export async function deleteRefundFeeRuleById(id: string) {
+  return RefundFeeRule.findByIdAndDelete(id).exec();
 }
 
 export async function findRefundLineStateOne(billId: string, ky: number) {

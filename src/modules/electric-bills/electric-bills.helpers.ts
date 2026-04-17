@@ -79,6 +79,8 @@ export type RefundLinePatchBodyItem = {
   agencyName: string;
   year: number;
   month: number;
+  amount?: number | null;
+  cardType?: string | null;
   scanDdMm: string | null;
   dealCompletedAt: string;
   status?: string;
