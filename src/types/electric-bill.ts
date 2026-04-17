@@ -59,9 +59,16 @@ export type AgencyOption = {
 export type RefundFeeRuleDto = {
   _id: string;
   agencyName: string;
+  feeName: string;
   statusLabel: string;
+  conditionType: "amount" | "cardType" | "manual";
+  amountMin: number | null;
+  amountMax: number | null;
+  cardType: string | null;
   pct: number;
   effectiveFrom: string;
+  effectiveTo: string | null;
+  isActive: boolean;
 };
 
 export type RefundLineStateDto = {
@@ -92,5 +99,8 @@ export type MailQueueLineDto = {
   customerName: string | null;
   /** Ngày thanh toán nhập trên Danh sách hóa đơn (dd/mm), theo kỳ — không dùng dealCompletedAt */
   scanDdMm: string | null;
+  cardType: string | null;
+  resolvedStatus: string | null;
+  resolvedPhiPct: number | null;
   dealCompletedAt: string;
 };
