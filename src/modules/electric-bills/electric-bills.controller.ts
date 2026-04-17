@@ -6,7 +6,10 @@ import {
   getInvoiceCompletedMonths,
   getInvoiceCompleted,
   getMailQueue,
+  listRefundFeeRules,
   createRefundFeeRule,
+  updateRefundFeeRule,
+  removeRefundFeeRule,
   patchRefundLineStates,
   migrateRefundLocalStorage,
   getAssignedCodes,
@@ -78,6 +81,33 @@ export async function createRefundFeeRuleHandler(req: Request, res: Response) {
     res.status(201).json(result);
   } catch (error) {
     handleError(res, error, "Không lưu được");
+  }
+}
+
+export async function listRefundFeeRulesHandler(req: Request, res: Response) {
+  try {
+    const result = await listRefundFeeRules(req.query);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không đọc được");
+  }
+}
+
+export async function updateRefundFeeRuleHandler(req: Request, res: Response) {
+  try {
+    const result = await updateRefundFeeRule(String(req.params.id), req.body);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không cập nhật được");
+  }
+}
+
+export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
+  try {
+    const result = await removeRefundFeeRule(String(req.params.id));
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không xóa được");
   }
 }
 
