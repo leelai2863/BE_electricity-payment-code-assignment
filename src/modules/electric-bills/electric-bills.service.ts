@@ -69,6 +69,11 @@ async function checkAssignedCodeConflict(
 
 export { ServiceError };
 
+function omitEvnField<T extends { evn?: unknown }>(row: T): Omit<T, "evn"> {
+  const { evn: _evn, ...rest } = row;
+  return rest;
+}
+
 export async function listUnassignedBills(query: Record<string, unknown>) {
   const rawAmountFilter = typeof query.amountFilter === "string" ? query.amountFilter : null;
   const amountFilter: AmountFilter | null =
@@ -149,7 +154,6 @@ export async function getInvoiceList(query: Record<string, unknown>) {
         ...aggregations,
         facets: {
           customerCode: (facets.customerCodes ?? []).filter(Boolean).slice(0, 500),
-          evn: (facets.evns ?? []).filter(Boolean).slice(0, 200),
           assignedAgencyName: (facets.assignedAgencyNames ?? []).filter(Boolean).slice(0, 500),
           scanDdMm: (facets.scanDdMms ?? []).filter(Boolean).slice(0, 500),
           month: (facets.months ?? [])
@@ -254,6 +258,7 @@ export async function getInvoiceCompleted(query: Record<string, unknown>) {
     const data = docs
       .map((d) => serializeElectricBill(d as Record<string, unknown>))
       .map((bill) => ({ ...bill, periods: completedAmountPeriods(bill.periods) }))
+      .map((bill) => omitEvnField(bill))
       .filter((bill) => bill.periods.length > 0);
 
     return { data, source: "mongodb" };
@@ -285,7 +290,6 @@ export async function getMailQueue() {
           monthLabel: bill.monthLabel,
           month: bill.month,
           year: bill.year,
-          evn: bill.evn,
           company: bill.company,
           ky: p.ky,
           amount: p.amount,

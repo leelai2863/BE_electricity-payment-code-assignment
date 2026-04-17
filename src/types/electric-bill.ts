@@ -82,7 +82,6 @@ export type MailQueueLineDto = {
   /** Tháng hóa đơn (1–12) — neo ngày cho mức phí hoàn tiền */
   month: number;
   year: number;
-  evn: string;
   company: string;
   ky: 1 | 2 | 3;
   amount: number | null;
