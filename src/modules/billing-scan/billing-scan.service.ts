@@ -313,7 +313,6 @@ export const BillingScanService = {
             snapshotId: null,
             ingestBatchId: batchId,
             snapshotCompletedAt: scanDate,
-            receivedAt: now,
           },
           $set: { receivedAt: now },
         },
