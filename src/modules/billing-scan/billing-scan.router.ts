@@ -13,6 +13,7 @@ router.get("/history", BillingScanController.getHistory);
 /** Scanned codes — ChargesStagingRow from checkbill ingest */
 router.get("/scanned-codes", BillingScanController.getScannedCodes);
 router.post("/scanned-codes/approve-batch", BillingScanController.approveScannedCodesBatch);
+router.post("/electric-bills/:billId/revoke-scan-approval", BillingScanController.revokeElectricBillScanApproval);
 router.post("/scanned-codes/:id/approve", BillingScanController.approveScannedCode);
 
 export default router;
