@@ -670,12 +670,42 @@ export async function patchElectricBill(id: string, body: PatchBody) {
     }
 
     if (body.periods?.length) {
+      const actorRoles = Array.isArray(body.actorRoles)
+        ? body.actorRoles
+            .filter((x): x is string => typeof x === "string")
+            .map((x) => x.trim().toUpperCase())
+        : [];
+      const isAdminActor = actorRoles.includes("ADMIN") || actorRoles.includes("SUPER_ADMIN");
       const billCustomerCode = doc.customerCode;
       const billYear = doc.year;
       const billMonth = doc.month;
 
       for (const patch of body.periods) {
         const cur = nextPeriods.find((p) => p.ky === patch.ky);
+        const currentCompleted = Boolean(cur?.dealCompletedAt);
+        const isEditingCompletedRow =
+          currentCompleted &&
+          (patch.scanDdMm !== undefined ||
+            patch.ca !== undefined ||
+            patch.assignedAgencyId !== undefined ||
+            patch.assignedAgencyName !== undefined ||
+            patch.dlGiaoName !== undefined ||
+            patch.paymentConfirmed !== undefined ||
+            patch.cccdConfirmed !== undefined ||
+            patch.customerName !== undefined ||
+            patch.cardType !== undefined);
+        const isUnconfirmAction =
+          currentCompleted &&
+          patch.dealCompletedAt !== undefined &&
+          (patch.dealCompletedAt === null || patch.dealCompletedAt === "");
+
+        if ((isEditingCompletedRow || isUnconfirmAction) && !isAdminActor) {
+          throw new ServiceError(403, "Chỉ ADMIN mới được sửa hoặc hủy xác nhận hóa đơn đã xác nhận.");
+        }
+
+        if (patch.amount !== undefined) {
+          throw new ServiceError(400, "Không được phép chỉnh sửa SỐ TIỀN.");
+        }
 
         if ((patch.assignedAgencyId === null || patch.assignedAgencyId === "") && cur?.amount != null) {
           await deleteAssignedCodeDoc(billCustomerCode, cur.amount, billYear, billMonth);

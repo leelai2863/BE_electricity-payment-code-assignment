@@ -70,6 +70,7 @@ export type PatchBody = {
   dealCompletedAt?: string | null;
   periods?: PeriodPatch;
   actorUserId?: string;
+  actorRoles?: string[] | null;
 };
 
 export type RefundLinePatchBodyItem = {
