@@ -4,7 +4,12 @@ import { serializeElectricBill, billHasIncompletePeriod } from "@/lib/electric-b
 import { isPeriodReadyForDealCompletion } from "@/lib/electric-bill-completion";
 import { periodsDtoToMongoSchema } from "@/lib/electric-bill-mongo-periods";
 import { scanDdMmIsNotFuture } from "@/lib/scan-ddmm";
-import { resolveRefundFeePctFromLine } from "@/lib/refund-fee-resolve";
+import {
+  resolveRefundFeePctFromLine,
+  resolveRefundRuleFromLine,
+  resolveRefundFeePctFromRulesByStatus,
+} from "@/lib/refund-fee-resolve";
+import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
 import type {
   MailQueueLineDto,
   RefundLineStateDto,
@@ -20,6 +25,9 @@ import {
   findRefundLineStates,
   findRefundFeeRules,
   createRefundFeeRuleDoc,
+  findRefundFeeRuleById,
+  updateRefundFeeRuleById,
+  deleteRefundFeeRuleById,
   findRefundLineStateOne,
   upsertRefundLineStateDoc,
   findAssignedCodeOne,
@@ -278,6 +286,13 @@ export async function getMailQueue() {
     ]);
 
     const lines: MailQueueLineDto[] = [];
+    const resolvedLineStates: RefundLineStateDto[] = [];
+    const lineStateMap = new Map<string, RefundLineStateDto>();
+    for (const x of lineStateDocs) {
+      const dto = serializeRefundLineStateDoc(x);
+      lineStateMap.set(`${dto.billId}_k${dto.ky}`, dto);
+    }
+    const feeRules = feeRuleDocs.map((x) => serializeRefundFeeRuleDoc(x));
 
     for (const d of docs) {
       const bill = serializeElectricBill(d as Record<string, unknown>);
@@ -298,17 +313,60 @@ export async function getMailQueue() {
           dlGiaoName: p.dlGiaoName,
           customerName: p.customerName,
           scanDdMm: p.scanDdMm,
+          cardType: p.cardType,
+          resolvedStatus: null,
+          resolvedPhiPct: null,
           dealCompletedAt: p.dealCompletedAt,
         });
       }
+    }
+
+    for (const line of lines) {
+      const agencyName = (line.assignedAgencyName ?? "").trim() || "(Chưa có đại lý)";
+      const agencyRules = feeRules.filter((r) => r.agencyName.trim().toUpperCase() === agencyName.trim().toUpperCase());
+      const hasManualRule = agencyRules.some((r) => r.isActive && r.conditionType === "manual");
+      const resolved = await resolveRefundRuleFromLine(agencyName, {
+        year: line.year,
+        month: line.month,
+        scanDdMm: line.scanDdMm,
+        dealCompletedAt: line.dealCompletedAt,
+        amount: line.amount,
+        cardType: line.cardType,
+      });
+      line.resolvedStatus = resolved?.statusLabel ?? null;
+      line.resolvedPhiPct = resolved?.pct ?? null;
+      const stateKey = `${line.billId}_k${line.ky}`;
+      const existing = lineStateMap.get(stateKey);
+      const anchor = refundAnchorDateUtc({
+        year: line.year,
+        month: line.month,
+        scanDdMm: line.scanDdMm,
+        dealCompletedAt: line.dealCompletedAt,
+      });
+      if (hasManualRule) {
+        const manualStatus = (existing?.status ?? "").trim();
+        const manualPct =
+          manualStatus ? resolveRefundFeePctFromRulesByStatus(feeRules, agencyName, manualStatus, anchor) : null;
+        line.resolvedStatus = manualStatus || null;
+        line.resolvedPhiPct = manualPct;
+      }
+      resolvedLineStates.push({
+        billId: line.billId,
+        ky: line.ky,
+        agencyName,
+        status: line.resolvedStatus ?? "",
+        phiPct: line.resolvedPhiPct,
+        daHoan: existing?.daHoan ?? 0,
+        updatedAt: existing?.updatedAt ?? new Date().toISOString(),
+      });
     }
 
     lines.sort((a, b) => new Date(b.dealCompletedAt).getTime() - new Date(a.dealCompletedAt).getTime());
 
     return {
       data: lines,
-      refundLineStates: lineStateDocs.map((x) => serializeRefundLineStateDoc(x)),
-      refundFeeRules: feeRuleDocs.map((x) => serializeRefundFeeRuleDoc(x)),
+      refundLineStates: resolvedLineStates,
+      refundFeeRules: feeRules,
       source: "mongodb",
     };
   } catch (error) {
@@ -318,16 +376,50 @@ export async function getMailQueue() {
 
 export async function createRefundFeeRule(body: {
   agencyName?: string;
+  feeName?: string;
   statusLabel?: string;
+  conditionType?: "amount" | "cardType" | "manual";
+  amountMin?: number | null;
+  amountMax?: number | null;
+  cardType?: string | null;
   pct?: number;
   effectiveFrom?: string;
+  effectiveTo?: string | null;
+  isActive?: boolean;
 }) {
   const agencyName = typeof body.agencyName === "string" ? body.agencyName.trim() : "";
+  const feeName = typeof body.feeName === "string" ? body.feeName.trim() : "";
   const statusLabel = typeof body.statusLabel === "string" ? body.statusLabel.trim().toUpperCase() : "";
+  const conditionType =
+    body.conditionType === "amount" || body.conditionType === "cardType" || body.conditionType === "manual"
+      ? body.conditionType
+      : "manual";
+  const amountMin =
+    body.amountMin === null || body.amountMin === undefined ? null : Number(body.amountMin);
+  const amountMax =
+    body.amountMax === null || body.amountMax === undefined ? null : Number(body.amountMax);
+  const cardType =
+    body.cardType == null || !String(body.cardType).trim()
+      ? null
+      : String(body.cardType).trim().toUpperCase();
   const pct = typeof body.pct === "number" ? body.pct : Number(body.pct);
 
   if (!agencyName || !statusLabel || !Number.isFinite(pct)) {
     throw new ServiceError(400, "Cần agencyName, statusLabel và pct hợp lệ");
+  }
+  if (conditionType === "amount") {
+    if (amountMin != null && !Number.isFinite(amountMin)) {
+      throw new ServiceError(400, "amountMin không hợp lệ");
+    }
+    if (amountMax != null && !Number.isFinite(amountMax)) {
+      throw new ServiceError(400, "amountMax không hợp lệ");
+    }
+    if (amountMin != null && amountMax != null && amountMin > amountMax) {
+      throw new ServiceError(400, "amountMin không được lớn hơn amountMax");
+    }
+  }
+  if (conditionType === "cardType" && !cardType) {
+    throw new ServiceError(400, "cardType là bắt buộc khi conditionType=cardType");
   }
 
   const effectiveFrom =
@@ -338,15 +430,30 @@ export async function createRefundFeeRule(body: {
   if (Number.isNaN(effectiveFrom.getTime())) {
     throw new ServiceError(400, "effectiveFrom không hợp lệ");
   }
+  const effectiveTo =
+    body.effectiveTo == null || !String(body.effectiveTo).trim() ? null : new Date(String(body.effectiveTo));
+  if (effectiveTo && Number.isNaN(effectiveTo.getTime())) {
+    throw new ServiceError(400, "effectiveTo không hợp lệ");
+  }
+  if (effectiveTo && effectiveTo.getTime() < effectiveFrom.getTime()) {
+    throw new ServiceError(400, "effectiveTo không được nhỏ hơn effectiveFrom");
+  }
 
   await ensureDb();
 
   try {
     const doc = await createRefundFeeRuleDoc({
       agencyName,
+      feeName,
       statusLabel,
+      conditionType,
+      amountMin: conditionType === "amount" ? amountMin : null,
+      amountMax: conditionType === "amount" ? amountMax : null,
+      cardType: conditionType === "cardType" ? cardType : null,
       pct,
       effectiveFrom,
+      effectiveTo,
+      isActive: body.isActive ?? true,
     });
 
     return {
@@ -357,6 +464,96 @@ export async function createRefundFeeRule(body: {
   } catch (error) {
     throw new ServiceError(500, getErrorMessage(error, "Không lưu được"));
   }
+}
+
+export async function listRefundFeeRules(query: Record<string, unknown>) {
+  const agencyName = typeof query.agencyName === "string" ? query.agencyName.trim() : "";
+  const includeInactive = String(query.includeInactive ?? "").trim().toLowerCase() === "true";
+  await ensureDb();
+  try {
+    const filter: Record<string, unknown> = {};
+    if (agencyName) filter.agencyName = agencyName;
+    if (!includeInactive) filter.isActive = true;
+    const docs = await findRefundFeeRules(filter);
+    return { data: docs.map((x) => serializeRefundFeeRuleDoc(x)), source: "mongodb" };
+  } catch (error) {
+    throw new ServiceError(503, getErrorMessage(error, "Không đọc được MongoDB"), { data: [] });
+  }
+}
+
+export async function updateRefundFeeRule(
+  id: string,
+  body: {
+    feeName?: string;
+    statusLabel?: string;
+    conditionType?: "amount" | "cardType" | "manual";
+    amountMin?: number | null;
+    amountMax?: number | null;
+    cardType?: string | null;
+    pct?: number;
+    effectiveFrom?: string;
+    effectiveTo?: string | null;
+    isActive?: boolean;
+  }
+) {
+  if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  await ensureDb();
+  const existing = await findRefundFeeRuleById(id);
+  if (!existing) throw new ServiceError(404, "Không tìm thấy rule phí");
+
+  const conditionType =
+    body.conditionType === "amount" || body.conditionType === "cardType" || body.conditionType === "manual"
+      ? body.conditionType
+      : (existing.conditionType as "amount" | "cardType" | "manual");
+  const amountMin =
+    body.amountMin === undefined ? existing.amountMin ?? null : body.amountMin == null ? null : Number(body.amountMin);
+  const amountMax =
+    body.amountMax === undefined ? existing.amountMax ?? null : body.amountMax == null ? null : Number(body.amountMax);
+  if (conditionType === "amount" && amountMin != null && amountMax != null && amountMin > amountMax) {
+    throw new ServiceError(400, "amountMin không được lớn hơn amountMax");
+  }
+  const effectiveFrom =
+    body.effectiveFrom === undefined ? existing.effectiveFrom : new Date(body.effectiveFrom);
+  if (Number.isNaN(new Date(effectiveFrom).getTime())) throw new ServiceError(400, "effectiveFrom không hợp lệ");
+  const effectiveTo =
+    body.effectiveTo === undefined
+      ? existing.effectiveTo ?? null
+      : body.effectiveTo == null || !String(body.effectiveTo).trim()
+        ? null
+        : new Date(String(body.effectiveTo));
+  if (effectiveTo && Number.isNaN(new Date(effectiveTo).getTime())) {
+    throw new ServiceError(400, "effectiveTo không hợp lệ");
+  }
+
+  const updated = await updateRefundFeeRuleById(id, {
+    feeName: body.feeName === undefined ? existing.feeName : body.feeName.trim(),
+    statusLabel: body.statusLabel === undefined ? existing.statusLabel : body.statusLabel.trim().toUpperCase(),
+    conditionType,
+    amountMin: conditionType === "amount" ? amountMin : null,
+    amountMax: conditionType === "amount" ? amountMax : null,
+    cardType:
+      conditionType === "cardType"
+        ? body.cardType === undefined
+          ? existing.cardType ?? null
+          : body.cardType == null
+            ? null
+            : String(body.cardType).trim().toUpperCase()
+        : null,
+    pct: body.pct === undefined ? existing.pct : Number(body.pct),
+    effectiveFrom: new Date(effectiveFrom),
+    effectiveTo: effectiveTo ? new Date(effectiveTo) : null,
+    isActive: body.isActive === undefined ? Boolean(existing.isActive ?? true) : Boolean(body.isActive),
+  });
+  if (!updated) throw new ServiceError(404, "Không tìm thấy rule phí");
+  return { data: serializeRefundFeeRuleDoc(updated.toObject()), source: "mongodb" };
+}
+
+export async function removeRefundFeeRule(id: string) {
+  if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  await ensureDb();
+  const deleted = await deleteRefundFeeRuleById(id);
+  if (!deleted) throw new ServiceError(404, "Không tìm thấy rule phí");
+  return { data: { deletedId: id }, source: "mongodb" };
 }
 
 export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyItem[] }) {
@@ -374,6 +571,7 @@ export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyI
 
   try {
     const out: RefundLineStateDto[] = [];
+    const feeRules = (await findRefundFeeRules({ isActive: true })).map((x) => serializeRefundFeeRuleDoc(x));
 
     for (const it of items) {
       if (!mongoose.isValidObjectId(it.billId)) {
@@ -404,26 +602,31 @@ export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyI
       };
 
       const existing = await findRefundLineStateOne(it.billId, ky);
-      const curStatus = (existing?.status ?? "") as string;
-      const curPhi = (existing?.phiPct ?? null) as number | null;
       const curDaHoan = typeof existing?.daHoan === "number" ? existing.daHoan : 0;
-
-      const statusProvided = it.status !== undefined;
-      const newStatus = statusProvided ? String(it.status).trim().toUpperCase() : curStatus;
       const newDaHoan = it.daHoan !== undefined ? Number(it.daHoan) || 0 : curDaHoan;
-      const overrideProvided = it.phiPctOverride !== undefined;
-
-      let newPhi: number | null = curPhi;
-      if (statusProvided) {
-        if (!newStatus) {
-          newPhi = null;
-        } else if (overrideProvided) {
-          const o = it.phiPctOverride;
-          newPhi = o === null || o === undefined ? null : Number(o);
-          if (newPhi !== null && !Number.isFinite(newPhi)) newPhi = null;
-        } else {
-          newPhi = await resolveRefundFeePctFromLine(agencyName, newStatus, anchorInput);
-        }
+      const anchor = refundAnchorDateUtc(anchorInput);
+      const hasManualRule = feeRules.some(
+        (r) =>
+          r.isActive &&
+          r.conditionType === "manual" &&
+          r.agencyName.trim().toUpperCase() === agencyName.trim().toUpperCase()
+      );
+      let newStatus = "";
+      let newPhi: number | null = null;
+      if (hasManualRule) {
+        newStatus =
+          it.status !== undefined
+            ? String(it.status).trim().toUpperCase()
+            : String(existing?.status ?? "").trim().toUpperCase();
+        newPhi = newStatus ? resolveRefundFeePctFromRulesByStatus(feeRules, agencyName, newStatus, anchor) : null;
+      } else {
+        const resolved = await resolveRefundRuleFromLine(agencyName, {
+          ...anchorInput,
+          amount: it.amount ?? null,
+          cardType: it.cardType ?? null,
+        });
+        newStatus = resolved?.statusLabel ?? "";
+        newPhi = resolved?.pct ?? null;
       }
 
       const doc = await upsertRefundLineStateDoc(it.billId, ky, {

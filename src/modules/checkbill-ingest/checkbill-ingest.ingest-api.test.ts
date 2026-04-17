@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
   connectDBMock: vi.fn(),
   findOneMock: vi.fn(),
   createMock: vi.fn(),
-  insertManyMock: vi.fn(),
+  bulkWriteMock: vi.fn(),
+  historyFindMock: vi.fn(),
 }));
 
 vi.mock("@/lib/mongodb", () => ({
@@ -22,7 +23,13 @@ vi.mock("@/models/CheckbillIngestBatch", () => ({
 
 vi.mock("@/models/ChargesStagingRow", () => ({
   ChargesStagingRow: {
-    insertMany: mocks.insertManyMock,
+    bulkWrite: mocks.bulkWriteMock,
+  },
+}));
+
+vi.mock("@/models/BillingScanHistory", () => ({
+  BillingScanHistory: {
+    find: mocks.historyFindMock,
   },
 }));
 
@@ -72,7 +79,12 @@ describe("POST /api/checkbill/charges-snapshot", () => {
     mocks.createMock.mockResolvedValue({
       _id: "batch-001",
     });
-    mocks.insertManyMock.mockResolvedValue(undefined);
+    mocks.bulkWriteMock.mockResolvedValue({ upsertedCount: 1 });
+    mocks.historyFindMock.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue([]),
+      }),
+    });
   });
 
   it("returns 401 when missing secret auth", async () => {
@@ -129,7 +141,39 @@ describe("POST /api/checkbill/charges-snapshot", () => {
       itemsAccepted: 1,
     });
     expect(mocks.createMock).toHaveBeenCalledTimes(1);
-    expect(mocks.insertManyMock).toHaveBeenCalledTimes(1);
+    expect(mocks.bulkWriteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops rows already existing in staging by dedupe hash", async () => {
+    mocks.bulkWriteMock.mockResolvedValue({ upsertedCount: 0 });
+    const res = await request(app)
+      .post("/api/checkbill/charges-snapshot")
+      .set("Authorization", "Bearer test-secret")
+      .send(buildValidPayload());
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.itemsAccepted).toBe(0);
+    expect(res.body.data.duplicateRowsDropped).toBe(1);
+    expect(mocks.bulkWriteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops rows already approved (has_bill) in the same completed month", async () => {
+    mocks.historyFindMock.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ customerCode: "PA123456789", amount: 120000 }]),
+      }),
+    });
+    const res = await request(app)
+      .post("/api/checkbill/charges-snapshot")
+      .set("Authorization", "Bearer test-secret")
+      .send(buildValidPayload());
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.itemsAccepted).toBe(0);
+    expect(res.body.data.duplicateRowsDropped).toBe(1);
+    expect(mocks.bulkWriteMock).not.toHaveBeenCalled();
   });
 });
 
