@@ -2,10 +2,10 @@ import { Request, Response } from "express";
 import { BillingScanService } from "./billing-scan.service";
 
 export const BillingScanController = {
-  // Các endpoint đã ngừng sử dụng
+  // Deprecated endpoints
   deprecatedJob(req: Request, res: Response) {
     res.status(410).json({
-      error: "Billing scan job đã ngừng sử dụng.",
+      error: "Billing scan job deprecated.",
       data: req.method === "GET" ? [] : undefined,
     });
   },
@@ -49,6 +49,18 @@ export const BillingScanController = {
       res.status(result.status).json(result.payload);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Duyệt hàng loạt thất bại";
+      res.status(500).json({ error: message });
+    }
+  },
+
+  async revokeElectricBillScanApproval(req: Request, res: Response) {
+    try {
+      const billId = String(req.params.billId ?? "");
+      const body = req.body as { actorRoles?: unknown } | undefined;
+      const result = await BillingScanService.revokeElectricBillScanApproval(billId, body?.actorRoles);
+      res.status(result.status).json(result.payload);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Huy duyet that bai";
       res.status(500).json({ error: message });
     }
   },
