@@ -8,6 +8,9 @@ const ChargesStagingRowSchema = new Schema(
     soTienDisplay: { type: String, default: "" },
     soTienVnd: { type: Number, required: true, min: 0 },
     tenKh: { type: String, default: "" },
+    /** Từ ingest (kyBill) — chỉ khi tool gửi đủ cặp hợp lệ */
+    evnKyBillThang: { type: Number, min: 1, max: 12, default: null },
+    evnKyBillNam: { type: Number, min: 2000, max: 2100, default: null },
     jobId: { type: String, required: true, trim: true, index: true },
     snapshotId: { type: Number, default: null, index: true },
     ingestBatchId: { type: Schema.Types.ObjectId, ref: "CheckbillIngestBatch", required: true, index: true },

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   getUnassignedHandler,
+  postUnassignedPaymentDeadlineSyncHandler,
   getInvoiceListHandler,
   getInvoiceCompletedMonthsHandler,
   getInvoiceCompletedHandler,
@@ -20,6 +21,7 @@ import {
 const router = Router();
 
 router.get("/unassigned", getUnassignedHandler);
+router.post("/unassigned/payment-deadline-sync", postUnassignedPaymentDeadlineSyncHandler);
 router.get("/invoice-list", getInvoiceListHandler);
 router.get("/invoice-completed-months", getInvoiceCompletedMonthsHandler);
 router.get("/invoice-completed", getInvoiceCompletedHandler);

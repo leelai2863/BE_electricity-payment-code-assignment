@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import type { PatchBody } from "@/modules/electric-bills/electric-bills.helpers";
+import { enqueueUnassignedPaymentDeadlineSync } from "@/modules/electric-bills/payment-deadline-sync.service";
 import {
   ServiceError,
   listUnassignedBills,
@@ -39,6 +40,21 @@ export async function getUnassignedHandler(req: Request, res: Response) {
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được MongoDB");
+  }
+}
+
+export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res: Response) {
+  try {
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const billIds = Array.isArray(body.billIds) ? (body.billIds as unknown[]).filter((x) => typeof x === "string") : undefined;
+    const result = await enqueueUnassignedPaymentDeadlineSync({
+      billIds: billIds as string[] | undefined,
+      force: Boolean(body.force),
+      requestedBy: body.requestedBy === "user" ? "user" : "system",
+    });
+    res.json({ ...result, source: "payment_deadline_sync_queue" });
+  } catch (error) {
+    handleError(res, error, "Không xếp hàng đồng bộ được");
   }
 }
 

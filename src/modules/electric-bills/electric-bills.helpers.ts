@@ -68,6 +68,9 @@ export type PatchBody = {
   assignedAgencyName?: string | null;
   assignedAt?: string | null;
   dealCompletedAt?: string | null;
+  /** Kỳ hóa đơn EVN (kyBill) — khi khác month/year refu; null để xóa neo */
+  evnKyBillThang?: number | null;
+  evnKyBillNam?: number | null;
   periods?: PeriodPatch;
   actorUserId?: string;
   actorRoles?: string[] | null;

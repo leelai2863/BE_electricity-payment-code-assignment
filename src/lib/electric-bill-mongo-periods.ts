@@ -16,5 +16,20 @@ export function periodsDtoToMongoSchema(periods: ElectricBillPeriod[]) {
     customerName: p.customerName ?? null,
     cardType: p.cardType ?? null,
     dealCompletedAt: p.dealCompletedAt ? new Date(p.dealCompletedAt) : null,
+    evnPaymentDeadlineSyncStatus:
+      p.evnPaymentDeadlineSyncStatus != null && String(p.evnPaymentDeadlineSyncStatus).trim()
+        ? String(p.evnPaymentDeadlineSyncStatus).trim()
+        : null,
+    evnPaymentDeadlineSyncError:
+      p.evnPaymentDeadlineSyncError != null && String(p.evnPaymentDeadlineSyncError).trim()
+        ? String(p.evnPaymentDeadlineSyncError).trim().slice(0, 2000)
+        : null,
+    evnPaymentDeadlineSyncedAt: p.evnPaymentDeadlineSyncedAt
+      ? new Date(p.evnPaymentDeadlineSyncedAt)
+      : null,
+    evnPaymentDeadlineSyncKey:
+      p.evnPaymentDeadlineSyncKey != null && String(p.evnPaymentDeadlineSyncKey).trim()
+        ? String(p.evnPaymentDeadlineSyncKey).trim().slice(0, 200)
+        : null,
   }));
 }

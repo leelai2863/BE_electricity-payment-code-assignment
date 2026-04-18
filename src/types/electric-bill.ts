@@ -18,6 +18,20 @@ export type ElectricBillPeriod = {
   cardType: string | null;
   /** Hoàn tất giao dịch theo kỳ — Đi mail */
   dealCompletedAt: string | null;
+  /** Trạng thái đồng bộ hạn TT từ AutoCheckEvn (trang chưa giao) */
+  evnPaymentDeadlineSyncStatus?:
+    | "pending"
+    | "running"
+    | "ok"
+    | "no_data"
+    | "error"
+    | "unsupported"
+    | string
+    | null;
+  evnPaymentDeadlineSyncError?: string | null;
+  evnPaymentDeadlineSyncedAt?: string | null;
+  /** Fingerprint lần đồng bộ thành công (year-month-ky-amount) — chu kỳ mới đổi amount → gọi lại */
+  evnPaymentDeadlineSyncKey?: string | null;
 };
 
 export type ElectricBillDto = {
@@ -25,6 +39,10 @@ export type ElectricBillDto = {
   customerCode: string;
   month: number;
   year: number;
+  /** kyBill.thang trên EVN khi khác `month` (ví dụ refu theo tháng duyệt quét) — dùng cho AutoCheck payment-due */
+  evnKyBillThang?: number | null;
+  /** kyBill.nam trên EVN khi khác `year` */
+  evnKyBillNam?: number | null;
   monthLabel: string;
   evn: string;
   company: string;

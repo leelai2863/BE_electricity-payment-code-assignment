@@ -13,6 +13,11 @@ type RawChargeRow = {
   so_tien_display?: string;
   so_tien_vnd?: number;
   ten_kh?: string;
+  /** Kỳ hóa đơn EVN — gửi cùng lúc với evn_ky_bill_nam */
+  evn_ky_bill_thang?: number;
+  evn_ky_bill_nam?: number;
+  evnKyBillThang?: number;
+  evnKyBillNam?: number;
 };
 
 type ChargesSnapshot = {
@@ -72,18 +77,39 @@ function toIsoDate(raw: string | undefined, fallback: Date): Date {
   return Number.isNaN(d.getTime()) ? fallback : d;
 }
 
+function readOptionalKyBillInt(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
 function mapRawRow(x: RawChargeRow | undefined): ChargeIngestItem | null {
   if (!x) return null;
   const maKh = String(x.ma_kh ?? "").trim();
   const soTienVnd = Number(x.so_tien_vnd ?? 0);
   if (!maKh || !Number.isFinite(soTienVnd) || soTienVnd < 0) return null;
-  return {
+  const t = readOptionalKyBillInt(x.evn_ky_bill_thang ?? x.evnKyBillThang);
+  const n = readOptionalKyBillInt(x.evn_ky_bill_nam ?? x.evnKyBillNam);
+  const base: ChargeIngestItem = {
     nguon: String(x.nguon ?? "").trim(),
     maKh,
     soTienDisplay: String(x.so_tien_display ?? "").trim(),
     soTienVnd,
     tenKh: String(x.ten_kh ?? "").trim(),
   };
+  if (
+    t != null &&
+    n != null &&
+    t >= 1 &&
+    t <= 12 &&
+    n >= 2000 &&
+    n <= 2100
+  ) {
+    base.evnKyBillThang = t;
+    base.evnKyBillNam = n;
+  }
+  return base;
 }
 
 function extractItemsArrayFromJson(body: unknown): RawChargeRow[] {
@@ -346,6 +372,9 @@ export async function ingestChargesSnapshot(
               soTienDisplay: it.soTienDisplay,
               soTienVnd: it.soTienVnd,
               tenKh: it.tenKh,
+              ...(it.evnKyBillThang != null && it.evnKyBillNam != null
+                ? { evnKyBillThang: it.evnKyBillThang, evnKyBillNam: it.evnKyBillNam }
+                : {}),
               jobId,
               snapshotId,
               ingestBatchId: batchOid,

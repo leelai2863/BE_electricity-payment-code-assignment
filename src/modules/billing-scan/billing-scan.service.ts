@@ -95,6 +95,8 @@ export type ChargesStagingRowSerialized = {
   soTienDisplay: string;
   soTienVnd: number;
   tenKh: string;
+  evnKyBillThang: number | null;
+  evnKyBillNam: number | null;
   jobId: string;
   snapshotId: number | null;
   ingestBatchId: string;
@@ -108,6 +110,15 @@ function iso(d: Date | undefined | null): string | null {
 }
 
 function serializeStagingRow(doc: Record<string, unknown>): ChargesStagingRowSerialized {
+  const t = doc.evnKyBillThang != null ? Math.trunc(Number(doc.evnKyBillThang)) : null;
+  const n = doc.evnKyBillNam != null ? Math.trunc(Number(doc.evnKyBillNam)) : null;
+  const pairOk =
+    t != null &&
+    n != null &&
+    t >= 1 &&
+    t <= 12 &&
+    n >= 2000 &&
+    n <= 2100;
   return {
     _id: String(doc._id),
     nguon: String(doc.nguon ?? ""),
@@ -115,6 +126,8 @@ function serializeStagingRow(doc: Record<string, unknown>): ChargesStagingRowSer
     soTienDisplay: String(doc.soTienDisplay ?? ""),
     soTienVnd: Number(doc.soTienVnd ?? 0),
     tenKh: String(doc.tenKh ?? ""),
+    evnKyBillThang: pairOk ? t : null,
+    evnKyBillNam: pairOk ? n : null,
     jobId: String(doc.jobId ?? ""),
     snapshotId: typeof doc.snapshotId === "number" ? doc.snapshotId : null,
     ingestBatchId: String(doc.ingestBatchId ?? ""),
@@ -175,6 +188,7 @@ export const BillingScanService = {
       };
     }
 
+    const st = serializeStagingRow(r);
     await upsertBillFromChargeItem(
       {
         nguon: String(r.nguon ?? ""),
@@ -182,6 +196,9 @@ export const BillingScanService = {
         soTienDisplay: String(r.soTienDisplay ?? ""),
         soTienVnd: amount,
         tenKh: String(r.tenKh ?? ""),
+        ...(st.evnKyBillThang != null && st.evnKyBillNam != null
+          ? { evnKyBillThang: st.evnKyBillThang, evnKyBillNam: st.evnKyBillNam }
+          : {}),
       },
       completedAt
     );

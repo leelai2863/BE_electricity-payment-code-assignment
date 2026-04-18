@@ -8,6 +8,7 @@ import agenciesRouter from "@/modules/agencies/agencies.router";
 import billingScanRouter from "@/modules/billing-scan/billing-scan.router";
 import checkbillIngestRouter from "@/modules/checkbill-ingest/checkbill-ingest.router";
 import electricBillsRouter from "@/modules/electric-bills/electric-bills.router";
+import { startPaymentDeadlineSyncWorker } from "@/modules/electric-bills/payment-deadline-sync.service";
 import vouchersRouter from "@/modules/vouchers/vouchers.router";
 import customerAccountsRouter from "@/modules/customer-accounts/customer-accounts.router";
 import devToolsRouter from "@/modules/dev-tools/dev-tools.router";
@@ -33,6 +34,8 @@ app.use("/api/dev-tools", devToolsRouter);
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
+
+startPaymentDeadlineSyncWorker();
 
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
