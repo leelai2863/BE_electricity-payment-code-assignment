@@ -11,9 +11,12 @@ import {
 } from "@/lib/refund-fee-resolve";
 import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
 import type {
+  ElectricBillPeriod,
   MailQueueLineDto,
   RefundLineStateDto,
 } from "@/types/electric-bill";
+import { ElectricBillRecord } from "@/models/ElectricBillRecord";
+import { normalizeScanDdMmInput } from "@/lib/scan-ddmm";
 import {
   findUnassignedCandidateBills,
   countInvoiceList,
@@ -35,6 +38,7 @@ import {
   deleteAssignedCodeDoc,
   findAssignedCodesList,
   findElectricBillById,
+  findElectricBillByCustomerYearMonth,
   assignElectricBillIfAvailable,
   markVoucherCodeCompleted,
   newObjectId,
@@ -843,6 +847,284 @@ export async function assignAgency(body: {
 
   return {
     data: serializeElectricBill(updatedDoc as Record<string, unknown>),
+    source: "mongodb",
+  };
+}
+
+function emptyManualPeriod(ky: 1 | 2 | 3): ElectricBillPeriod {
+  return {
+    ky,
+    amount: null,
+    paymentDeadline: null,
+    scanDate: null,
+    scanDdMm: null,
+    ca: null,
+    assignedAgencyId: null,
+    assignedAgencyName: null,
+    dlGiaoName: null,
+    paymentConfirmed: false,
+    cccdConfirmed: false,
+    customerName: null,
+    cardType: null,
+    dealCompletedAt: null,
+  };
+}
+
+function parsePositiveAmountInput(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return v > 0 ? Math.round(v) : null;
+  }
+  const s = String(v)
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(/,/g, "");
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n);
+}
+
+function parsePaymentDeadlineToIso(raw: unknown): string | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const d = new Date(String(raw).trim());
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function parseOptionalIsoString(raw: unknown): string | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const d = new Date(String(raw).trim());
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function periodAgencyNamesMatch(p: ElectricBillPeriod): boolean {
+  const agency = (p.assignedAgencyName ?? "").trim().toLowerCase();
+  const dl = (p.dlGiaoName ?? "").trim().toLowerCase();
+  return Boolean(agency && dl && agency === dl);
+}
+
+function mergeManualPeriodsFromBody(raw: unknown): ElectricBillPeriod[] {
+  const base: ElectricBillPeriod[] = [emptyManualPeriod(1), emptyManualPeriod(2), emptyManualPeriod(3)];
+  if (!Array.isArray(raw)) return base;
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    const ky = Number(r.ky);
+    if (ky !== 1 && ky !== 2 && ky !== 3) continue;
+    const idx = ky - 1;
+    if ("amount" in r) {
+      if (r.amount == null || String(r.amount).trim() === "") {
+        base[idx].amount = null;
+      } else {
+        const amt = parsePositiveAmountInput(r.amount);
+        base[idx].amount = amt;
+      }
+    }
+    if ("paymentDeadline" in r) {
+      base[idx].paymentDeadline = parsePaymentDeadlineToIso(r.paymentDeadline);
+    }
+    if (typeof r.scanDdMm === "string") {
+      const n = normalizeScanDdMmInput(r.scanDdMm.trim());
+      base[idx].scanDdMm = n;
+    }
+    if (r.ca === "10h" || r.ca === "16h" || r.ca === "24h" || r.ca === "" || r.ca == null) {
+      base[idx].ca = r.ca === "" || r.ca == null ? null : r.ca;
+    }
+    if (typeof r.assignedAgencyId === "string") {
+      base[idx].assignedAgencyId = r.assignedAgencyId.trim() || null;
+    }
+    if (typeof r.assignedAgencyName === "string") {
+      base[idx].assignedAgencyName = r.assignedAgencyName.trim() || null;
+    }
+    if (typeof r.dlGiaoName === "string") {
+      base[idx].dlGiaoName = r.dlGiaoName.trim() || null;
+    }
+    if (typeof r.paymentConfirmed === "boolean") base[idx].paymentConfirmed = r.paymentConfirmed;
+    if (typeof r.cccdConfirmed === "boolean") base[idx].cccdConfirmed = r.cccdConfirmed;
+    if (typeof r.customerName === "string") {
+      base[idx].customerName = r.customerName.trim() || null;
+    }
+    if (typeof r.cardType === "string") {
+      base[idx].cardType = r.cardType.trim() || null;
+    }
+    if ("dealCompletedAt" in r) {
+      base[idx].dealCompletedAt = parseOptionalIsoString(r.dealCompletedAt);
+    }
+    if ("scanDate" in r) {
+      base[idx].scanDate = parseOptionalIsoString(r.scanDate);
+    }
+  }
+  return base;
+}
+
+/** Nhập tay hóa đơn (Danh sách hóa đơn) — một bản ghi / tháng / mã KH; STT do UI tính theo danh sách. */
+export async function createManualElectricBill(body: Record<string, unknown>) {
+  const actorRoles = Array.isArray(body.actorRoles)
+    ? body.actorRoles
+        .filter((x): x is string => typeof x === "string")
+        .map((x) => x.trim().toUpperCase())
+    : [];
+  const isAdminActor = actorRoles.includes("ADMIN") || actorRoles.includes("SUPER_ADMIN");
+  if (!isAdminActor) {
+    throw new ServiceError(403, "Chỉ ADMIN hoặc SUPER_ADMIN được thêm hóa đơn nhập tay.");
+  }
+
+  const actorId = newObjectId(body.actorUserId as string | undefined);
+  const customerCode =
+    typeof body.customerCode === "string" ? body.customerCode.trim().toUpperCase() : "";
+  if (!customerCode) {
+    throw new ServiceError(400, "customerCode (mã HĐ) là bắt buộc");
+  }
+  const month = Number(body.month);
+  const year = Number(body.year);
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw new ServiceError(400, "month phải là số nguyên 1–12");
+  }
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw new ServiceError(400, "year không hợp lệ");
+  }
+
+  await ensureDb();
+
+  const dup = await findElectricBillByCustomerYearMonth(customerCode, year, month);
+  if (dup) {
+    throw new ServiceError(
+      409,
+      `Đã tồn tại hóa đơn ${customerCode} tháng ${month}/${year}. Chỉnh sửa trên bảng hoặc xóa bản cũ trước khi thêm mới.`
+    );
+  }
+
+  const periodsDto = mergeManualPeriodsFromBody(body.periods);
+  if (Array.isArray(body.periods)) {
+    for (const row of body.periods) {
+      if (!row || typeof row !== "object") continue;
+      const r = row as Record<string, unknown>;
+      const ky = Number(r.ky);
+      if (ky !== 1 && ky !== 2 && ky !== 3) continue;
+      const hasAmt = "amount" in r && r.amount != null && String(r.amount).trim() !== "";
+      const p = periodsDto[ky - 1];
+      if (hasAmt && p.amount == null) {
+        throw new ServiceError(400, `Kỳ ${ky}: số tiền không hợp lệ`);
+      }
+    }
+  }
+
+  const hasAnyAmount = periodsDto.some((p) => p.amount != null);
+  if (!hasAnyAmount) {
+    throw new ServiceError(400, "Cần ít nhất một kỳ có số tiền để hiển thị trong danh sách chưa xác nhận.");
+  }
+
+  for (const p of periodsDto) {
+    if (p.amount != null && (!Number.isFinite(p.amount) || p.amount <= 0)) {
+      throw new ServiceError(400, `Kỳ ${p.ky}: số tiền phải là số dương hợp lệ.`);
+    }
+  }
+
+  for (const p of periodsDto) {
+    const raw = p.scanDdMm?.trim();
+    if (raw && !scanDdMmIsNotFuture(raw)) {
+      throw new ServiceError(
+        400,
+        `Kỳ ${p.ky}: ngày thanh toán (dd/mm) không được sau hôm nay.`
+      );
+    }
+  }
+
+  for (const p of periodsDto) {
+    if (!p.dealCompletedAt) continue;
+    const forValidate: ElectricBillPeriod = { ...p, dealCompletedAt: null };
+    if (!isPeriodReadyForDealCompletion(forValidate)) {
+      throw new ServiceError(
+        400,
+        `Kỳ ${p.ky}: chưa đủ điều kiện hoàn tất (Đại lý, Bill, CCCD, tên KH, ngày dd/mm, CA).`
+      );
+    }
+    if (!periodAgencyNamesMatch(p)) {
+      throw new ServiceError(
+        400,
+        `Kỳ ${p.ky}: ĐẠI LÝ và ĐẠI LÝ TT phải trùng tên để hoàn tất.`
+      );
+    }
+  }
+
+  for (const p of periodsDto) {
+    if (p.amount == null || !p.assignedAgencyId?.trim()) continue;
+    const conflict = await checkAssignedCodeConflict(
+      customerCode,
+      p.amount,
+      year,
+      month,
+      p.assignedAgencyId
+    );
+    if (conflict) {
+      throw new ServiceError(
+        409,
+        `Mã "${customerCode}" số tiền ${p.amount.toLocaleString("vi-VN")}đ tháng ${month}/${year} đã được giao cho đại lý "${conflict}".`
+      );
+    }
+  }
+
+  const monthLabel =
+    typeof body.monthLabel === "string" && body.monthLabel.trim()
+      ? body.monthLabel.trim()
+      : `T${month}/${year}`;
+  const evn = typeof body.evn === "string" && body.evn.trim() ? body.evn.trim() : "EVNCPC";
+  const company = typeof body.company === "string" ? body.company.trim() : "";
+
+  const doc = new ElectricBillRecord({
+    customerCode,
+    month,
+    year,
+    monthLabel,
+    evn,
+    company,
+    periods: periodsDtoToMongoSchema(periodsDto),
+  });
+  syncBillLevelFromPeriods(doc, periodsDto);
+
+  try {
+    await doc.save();
+  } catch (e: unknown) {
+    const code = (e as { code?: number })?.code;
+    if (code === 11000) {
+      throw new ServiceError(409, "Trùng mã HĐ + tháng/năm (unique index).");
+    }
+    throw new ServiceError(500, getErrorMessage(e, "Không lưu được hóa đơn"));
+  }
+
+  const id = String(doc._id);
+  for (const p of periodsDto) {
+    if (p.amount == null || !p.assignedAgencyId?.trim() || !p.assignedAgencyName?.trim()) continue;
+    await upsertAssignedCodeDoc({
+      customerCode,
+      amount: p.amount,
+      year,
+      month,
+      agencyId: p.assignedAgencyId,
+      agencyName: p.assignedAgencyName,
+      billId: id,
+      ky: p.ky,
+    });
+  }
+
+  const allPeriodsConfirmed = periodsDto.every((p) => p.amount == null || Boolean(p.dealCompletedAt));
+  if (allPeriodsConfirmed) {
+    await markVoucherCodeCompleted(doc.customerCode);
+  }
+
+  await writeAuditLog({
+    actorUserId: actorId,
+    action: "electric.manual_create",
+    entityType: "ElectricBillRecord",
+    entityId: doc._id,
+    metadata: { customerCode, month, year },
+  });
+
+  return {
+    data: serializeElectricBill(doc.toObject()),
     source: "mongodb",
   };
 }

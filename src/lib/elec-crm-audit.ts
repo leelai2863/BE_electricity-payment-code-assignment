@@ -9,6 +9,7 @@ function auditActionForCentral(mongoAction: AuditAction): string {
   const map: Partial<Record<AuditAction, string>> = {
     "electric.assign_agency": "elec.assign_agency",
     "electric.invoice_patch": "elec.invoice_patch",
+    "electric.manual_create": "elec.manual_create",
     "voucher.assign": "elec.voucher.assign",
     "voucher.upload_ocr": "elec.voucher.upload_ocr",
     "voucher.profile_update": "elec.voucher.profile_update",
@@ -42,6 +43,11 @@ function buildViSummary(
       return code
         ? `Cập nhật hóa đơn điện mã KH ${code}${fields ? ` (${fields})` : ""}.`
         : `Cập nhật hóa đơn điện (${entityType}).`;
+    }
+    case "electric.manual_create": {
+      const code = String(m.customerCode ?? "").trim();
+      const mo = m.month != null && m.year != null ? ` tháng ${m.month}/${m.year}` : "";
+      return code ? `Thêm hóa đơn tay mã KH ${code}${mo}.` : `Thêm hóa đơn tay (${entityType}).`;
     }
     case "voucher.upload_ocr": {
       const fc = Array.isArray(m.fields) ? m.fields.length : Number(m.fieldsCount ?? 0) || 0;

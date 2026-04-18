@@ -23,6 +23,7 @@ const AuditLogSchema = new Schema(
         "checkbill.ingest_charges_snapshot",
         "electric.assign_agency",
         "electric.invoice_patch",
+        "electric.manual_create",
         "agency.create",
         "auth.login",
       ],

@@ -14,6 +14,7 @@ import {
   getAssignedCodesHandler,
   assignAgencyHandler,
   patchElectricBillHandler,
+  createManualElectricBillHandler,
 } from "./electric-bills.controller";
 
 const router = Router();
@@ -31,6 +32,7 @@ router.patch("/refund-line-states", patchRefundLineStatesHandler);
 router.post("/refund-migrate-localstorage", migrateRefundLocalStorageHandler);
 router.get("/assigned-codes", getAssignedCodesHandler);
 router.post("/assign", assignAgencyHandler);
+router.post("/manual", createManualElectricBillHandler);
 router.patch("/:id", patchElectricBillHandler);
 
 export default router;

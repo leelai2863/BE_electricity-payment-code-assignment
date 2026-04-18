@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { escapeRegex } from "@/modules/electric-bills/electric-bills.helpers";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import { AssignedCode } from "@/models/AssignedCode";
 import { VoucherCode } from "@/models/VoucherCode";
@@ -216,6 +217,18 @@ export async function findAssignedCodesList(filter: Record<string, unknown>) {
 
 export async function findElectricBillById(id: string) {
   return ElectricBillRecord.findById(id).exec();
+}
+
+export async function findElectricBillByCustomerYearMonth(customerCode: string, year: number, month: number) {
+  const code = customerCode.trim();
+  if (!code) return null;
+  return ElectricBillRecord.findOne({
+    year,
+    month,
+    customerCode: { $regex: new RegExp(`^${escapeRegex(code)}$`, "i") },
+  })
+    .select("_id")
+    .lean();
 }
 
 export async function assignElectricBillIfAvailable(params: {

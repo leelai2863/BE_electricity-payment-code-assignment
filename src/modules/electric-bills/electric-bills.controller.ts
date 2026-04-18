@@ -17,6 +17,7 @@ import {
   getAssignedCodes,
   assignAgency,
   patchElectricBill,
+  createManualElectricBill,
 } from "./electric-bills.service";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
@@ -159,5 +160,15 @@ export async function patchElectricBillHandler(req: Request, res: Response) {
     res.json(result);
   } catch (error) {
     handleError(res, error, "Cập nhật không thành công");
+  }
+}
+
+export async function createManualElectricBillHandler(req: Request, res: Response) {
+  try {
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const result = await createManualElectricBill(body);
+    res.status(201).json(result);
+  } catch (error) {
+    handleError(res, error, "Không tạo được hóa đơn");
   }
 }
