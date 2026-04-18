@@ -99,6 +99,25 @@ jobs:
             fi
             docker compose -f docker-compose.deploy.yml up -d --remove-orphans
             HP="${HEALTH_PORT:-1389}"
-            sleep 6
-            curl -fsS "http://127.0.0.1:${HP}/health"
-            docker compose -f docker-compose.deploy.yml ps
+            echo "Health http://127.0.0.1:${HP}/health (chờ 20s cold start, tối đa ~2 phút)"
+            sleep 20
+            ok=0
+            i=1
+            while [ "${i}" -le 24 ]; do
+              code="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${HP}/health" || true)"
+              if [ "${code}" = "200" ]; then
+                echo "Health OK (HTTP ${code})."
+                ok=1
+                break
+              fi
+              echo "Health pending (${i}/24), HTTP ${code:-000}"
+              sleep 5
+              i=$((i + 1))
+            done
+            if [ "${ok}" != "1" ]; then
+              echo "Warning: /health không 200 — HEALTH_CHECK_PORT phải trùng BACKEND_HOST_PORT trên server."
+              docker compose -f docker-compose.deploy.yml ps || true
+              docker compose -f docker-compose.deploy.yml logs --tail=120 backend || true
+              docker compose -f docker-compose.deploy.yml logs --tail=80 mongo || true
+            fi
+            docker compose -f docker-compose.deploy.yml ps || true
