@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import {
   autocheckGetPaymentDue,
@@ -24,6 +25,26 @@ export type PaymentDeadlineSyncJob = {
 
 const queue: PaymentDeadlineSyncJob[] = [];
 const queuedKeys = new Set<string>();
+
+/** Lần cuối xếp hàng job billId+ky (giảm spam AutoCheck / captcha). */
+const lastEnqueueAtByJobKey = new Map<string, number>();
+
+function minEnqueueGapMs(force: boolean): number {
+  if (force) {
+    return Math.max(0, Number(process.env.PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS ?? 45_000) || 45_000);
+  }
+  return Math.max(0, Number(process.env.PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS ?? 120_000) || 120_000);
+}
+
+/** POST không truyền billIds (quét toàn bộ chờ giao) — hạn chế tần suất. */
+let lastEmptyBillIdsBulkAt = 0;
+
+function emptyBillIdsBulkCooldownMs(): number {
+  return Math.max(
+    0,
+    Number(process.env.PAYMENT_DEADLINE_SYNC_EMPTY_BILL_IDS_COOLDOWN_MS ?? 120_000) || 120_000,
+  );
+}
 
 const STALE_PENDING_MS = 4 * 60 * 1000;
 
@@ -269,9 +290,15 @@ export function startPaymentDeadlineSyncWorker(): void {
   }, tickMs);
 }
 
-export function enqueuePaymentDeadlineSync(job: PaymentDeadlineSyncJob): "queued" | "duplicate" {
+export function enqueuePaymentDeadlineSync(job: PaymentDeadlineSyncJob): "queued" | "duplicate" | "cooldown" {
   const k = jobKey(job);
   if (queuedKeys.has(k)) return "duplicate";
+  const gap = minEnqueueGapMs(job.force);
+  const last = lastEnqueueAtByJobKey.get(k) ?? 0;
+  if (gap > 0 && Date.now() - last < gap) {
+    return "cooldown";
+  }
+  lastEnqueueAtByJobKey.set(k, Date.now());
   queuedKeys.add(k);
   queue.push(job);
   return "queued";
@@ -285,18 +312,32 @@ export type EnqueueUnassignedPaymentDeadlineBody = {
 
 /**
  * Xếp hàng đồng bộ hạn TT (theo kỳ) cho các bill chờ giao.
- * Trùng billId+ky trong RAM sẽ không enqueue lại; trùng trạng thái DB (ok + cùng fingerprint) do worker bỏ qua.
+ * Trùng billId+ky trong RAM sẽ không enqueue lại; cooldown giữa các lần xếp hàng cùng billId+ky; trùng trạng thái DB do worker bỏ qua.
  */
 export async function enqueueUnassignedPaymentDeadlineSync(
   body: EnqueueUnassignedPaymentDeadlineBody,
-): Promise<{ enqueued: number; duplicate: number; skipped: number }> {
+): Promise<{ enqueued: number; duplicate: number; skipped: number; cooldown: number }> {
   const force = Boolean(body.force);
   const requestedBy = body.requestedBy === "user" ? "user" : "system";
   const ids = Array.isArray(body.billIds) ? body.billIds.filter((x) => typeof x === "string" && x.trim()) : [];
 
+  if (ids.length === 0) {
+    const cool = emptyBillIdsBulkCooldownMs();
+    const now = Date.now();
+    if (!force && cool > 0 && now - lastEmptyBillIdsBulkAt < cool) {
+      const waitSec = Math.ceil((cool - (now - lastEmptyBillIdsBulkAt)) / 1000);
+      throw new ServiceError(
+        429,
+        `Đồng bộ toàn bộ danh sách chờ giao chỉ nên gọi mỗi ${Math.ceil(cool / 60_000)} phút (giảm tải AutoCheck). Thử lại sau ${waitSec}s hoặc truyền billIds cụ thể.`,
+      );
+    }
+    lastEmptyBillIdsBulkAt = now;
+  }
+
   let enqueued = 0;
   let duplicate = 0;
   let skipped = 0;
+  let cooldown = 0;
 
   const considerBill = async (billId: string) => {
     const raw = await findElectricBillById(billId);
@@ -320,7 +361,8 @@ export async function enqueueUnassignedPaymentDeadlineSync(
       }
       const r = enqueuePaymentDeadlineSync({ billId, ky, force, requestedBy });
       if (r === "queued") enqueued += 1;
-      else duplicate += 1;
+      else if (r === "duplicate") duplicate += 1;
+      else cooldown += 1;
     }
   };
 
@@ -336,5 +378,5 @@ export async function enqueueUnassignedPaymentDeadlineSync(
     for (const b of bills) await considerBill(b._id);
   }
 
-  return { enqueued, duplicate, skipped };
+  return { enqueued, duplicate, skipped, cooldown };
 }

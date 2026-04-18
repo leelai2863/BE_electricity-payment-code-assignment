@@ -37,6 +37,12 @@ Tài liệu mô tả phạm vi đã triển khai, biến môi trường, API và
 
 Chi tiết handler nằm trong `electric-bills.controller.ts` / `electric-bills.router.ts`.
 
+## Giới hạn tần suất (tránh spam AutoCheck / captcha)
+
+- **Theo job (`billId` + kỳ)**: giữa hai lần **xếp hàng** cùng job, phải cách một khoảng tối thiểu (mặc định **120s** khi `force: false`, **45s** khi `force: true`). Nếu gọi quá sớm, job không vào hàng đợi — response có `cooldown` (số lần bị từ chối theo kỳ).
+- **POST không truyền `billIds`** (đồng bộ toàn bộ chờ giao trên server): tối thiểu **120s** giữa hai lần (mặc định); nếu quá sớm trả **HTTP 429** và message tiếng Việt. Truyền `billIds` cụ thể không áp dụng hạn chế này.
+- **CRM**: tự động xếp hàng **một lần** sau khi tải danh sách (các bill thiếu hạn TT), **không** lặp lại khi đổi bộ lọc. Nút **“Lấy lại hạn TT (EVN)”**: tối thiểu **60s** giữa hai lần bấm (phía client).
+
 ## Biến môi trường (Assign-refu-manager-service)
 
 Chỉ tên biến — giá trị đặt trên server, **không** commit file `.env`.
@@ -50,6 +56,9 @@ Chỉ tên biến — giá trị đặt trên server, **không** commit file `.e
 | `AUTOCHECK_EVN_TASK_POLL_MS` / `AUTOCHECK_EVN_TASK_POLL_MAX_MS` | Poll task CPC sau `POST /api/tasks`. |
 | `PAYMENT_DEADLINE_CPC_SCRAPE_ON_404` | `false` để tắt nhánh quét CPC khi 404 (mặc định bật). |
 | `PAYMENT_DEADLINE_SYNC_TICK_MS` | Chu kỳ worker queue (mặc định 700). |
+| `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS` | Khoảng cách tối thiểu giữa hai lần xếp hàng cùng bill+kỳ khi **không** `force` (mặc định 120000). |
+| `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS` | Tương tự khi `force: true` (mặc định 45000). |
+| `PAYMENT_DEADLINE_SYNC_EMPTY_BILL_IDS_COOLDOWN_MS` | POST **không** có `billIds` — khoảng cách tối thiểu (mặc định 120000). |
 | `CHECKBILL_INGEST_SECRET` | Xác thực ingest snapshot (Bearer / `x-api-key`). |
 | `CHECKBILL_INGEST_MAX_ITEMS` / `RECEIVED_INGEST_MAX_ITEMS` | Trần số dòng items. |
 | `GATEWAY_CALLBACK_URL` / `CHECKBILL_GATEWAY_CALLBACK_URL` | Callback sau ingest (tuỳ chọn). |
