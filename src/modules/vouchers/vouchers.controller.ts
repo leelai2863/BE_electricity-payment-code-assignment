@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import {
   getVouchers,
   ocrVoucher,
@@ -30,7 +31,7 @@ export async function getVouchersController(req: Request, res: Response) {
 export async function ocrVoucherController(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
-    const body = req.body as {
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>) as {
       cccdBase64?: string;
       billBase64?: string;
       actorUserId?: string;
@@ -51,7 +52,7 @@ export async function ocrVoucherController(req: Request, res: Response) {
 
 export async function updateVoucherProfileController(req: Request, res: Response) {
   const id = String(req.params.id);
-  const body = req.body as {
+  const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>) as {
     customerProfile?: Record<string, unknown>;
     actorUserId?: string;
   };
@@ -77,7 +78,9 @@ export async function updateVoucherProfileController(req: Request, res: Response
 export async function approveVoucherController(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
-    const body = req.body as { actorUserId?: string };
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>) as {
+      actorUserId?: string;
+    };
 
     const result = await approveVoucher({
       id,

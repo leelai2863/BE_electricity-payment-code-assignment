@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { writeAuditLog } from "@/lib/audit";
+import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
 import { connectDB } from "@/lib/mongodb";
 import { chargeDedupeKey, type ChargeIngestItem } from "@/lib/checkbill-charge-upsert";
 import { BillingScanHistory } from "@/models/BillingScanHistory";
@@ -386,6 +388,26 @@ export async function ingestChargesSnapshot(
     processStatus: "received",
     receivedAt: now,
   });
+
+  try {
+    await writeAuditLog({
+      actorUserId: new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID),
+      action: "checkbill.ingest_charges_snapshot",
+      entityType: "CheckbillIngestBatch",
+      entityId: batchOid,
+      metadata: {
+        jobId,
+        snapshotId,
+        itemsAccepted,
+        rawRowCount,
+        duplicateRowsDropped: totalDuplicateDropped,
+        fullFetch: usedFetch,
+        projectId: String(body.project_id ?? "checkbill").trim(),
+      },
+    });
+  } catch {
+    /* ingest vẫn ACK — audit phụ */
+  }
 
   void notifyGatewayIngestReceived({
     batchId: String(doc._id),

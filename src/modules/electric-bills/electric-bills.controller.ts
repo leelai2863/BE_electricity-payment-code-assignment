@@ -1,4 +1,6 @@
 import type { Request, Response } from "express";
+import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
+import type { PatchBody } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   ServiceError,
   listUnassignedBills,
@@ -140,7 +142,10 @@ export async function getAssignedCodesHandler(req: Request, res: Response) {
 
 export async function assignAgencyHandler(req: Request, res: Response) {
   try {
-    const result = await assignAgency(req.body);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const result = await assignAgency(
+      body as { billId: string; agencyId: string; agencyName: string; actorUserId?: string }
+    );
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không giao được mã");
@@ -149,7 +154,8 @@ export async function assignAgencyHandler(req: Request, res: Response) {
 
 export async function patchElectricBillHandler(req: Request, res: Response) {
   try {
-    const result = await patchElectricBill(String(req.params.id), req.body);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const result = await patchElectricBill(String(req.params.id), body as PatchBody);
     res.json(result);
   } catch (error) {
     handleError(res, error, "Cập nhật không thành công");
