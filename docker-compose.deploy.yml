@@ -17,6 +17,7 @@ services:
   backend:
     image: ${REGISTRY_BASE}:${IMAGE_TAG}
     container_name: giaodich-backend
+    # Host port: set BACKEND_HOST_PORT in .env; GitHub secret HEALTH_CHECK_PORT must match.
     ports:
       - "${BACKEND_HOST_PORT:-1389}:3001"
     env_file:
