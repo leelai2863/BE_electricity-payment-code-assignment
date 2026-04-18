@@ -330,7 +330,7 @@ export const BillingScanService = {
         status: 200 as const,
         payload: {
           ok: true,
-          data: { billDeleted: true, revivedStagingCount: revokeKys.size },
+          data: { billDeleted: true, revivedStagingCount: revokeKys.size, customerCode },
           source: "mongodb",
         },
       };
@@ -350,7 +350,7 @@ export const BillingScanService = {
       status: 200 as const,
       payload: {
         ok: true,
-        data: { billDeleted: false, revivedStagingCount: revokeKys.size },
+        data: { billDeleted: false, revivedStagingCount: revokeKys.size, customerCode },
         source: "mongodb",
       },
     };

@@ -1,0 +1,17 @@
+export type AuditAction =
+  | "voucher.assign"
+  | "voucher.upload_ocr"
+  | "voucher.profile_update"
+  | "voucher.approve"
+  | "voucher.mail_sent"
+  | "voucher.status_change"
+  | "billing_scan.start"
+  | "billing_scan.complete"
+  | "billing_scan.approve_staging"
+  | "billing_scan.approve_staging_batch"
+  | "billing_scan.revoke_scan_approval"
+  | "checkbill.ingest_charges_snapshot"
+  | "electric.assign_agency"
+  | "electric.invoice_patch"
+  | "agency.create"
+  | "auth.login";

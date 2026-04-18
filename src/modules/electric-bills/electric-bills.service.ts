@@ -1024,7 +1024,10 @@ export async function patchElectricBill(id: string, body: PatchBody) {
       action: "electric.invoice_patch",
       entityType: "ElectricBillRecord",
       entityId: doc._id,
-      metadata: { fields: Object.keys(body) },
+      metadata: {
+        customerCode: doc.customerCode,
+        patchedFields: Object.keys(body).filter((k) => k !== "actorUserId" && k !== "actorRoles"),
+      },
     });
 
     return {

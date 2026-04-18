@@ -13,6 +13,7 @@
     "docker:prod:down": "docker compose -f docker-compose.prod.yml down"
   },
   "dependencies": {
+    "@core-x/shared-logger": "file:../packages/shared-logger",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "exceljs": "^4.4.0",
