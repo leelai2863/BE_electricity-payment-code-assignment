@@ -9,7 +9,22 @@ export type ChargeIngestItem = {
   soTienDisplay: string;
   soTienVnd: number;
   tenKh: string;
+  /** Kỳ hóa đơn EVN (kyBill) — chỉ dùng khi đủ cặp tháng + năm hợp lệ */
+  evnKyBillThang?: number | null;
+  evnKyBillNam?: number | null;
 };
+
+/** Trả về cặp (thang, nam) khi ingest có đủ hai giá trị hợp lệ; không thì null. */
+export function evnKyBillPairFromIngestItem(item: ChargeIngestItem): { thang: number; nam: number } | null {
+  const t = item.evnKyBillThang;
+  const n = item.evnKyBillNam;
+  if (t == null || n == null) return null;
+  const thang = Math.trunc(Number(t));
+  const nam = Math.trunc(Number(n));
+  if (!Number.isInteger(thang) || thang < 1 || thang > 12) return null;
+  if (!Number.isInteger(nam) || nam < 2000 || nam > 2100) return null;
+  return { thang, nam };
+}
 
 export function chargeDedupeKey(maKh: string, soTienVnd: number): string {
   const code = String(maKh ?? "").trim().toUpperCase();
@@ -25,6 +40,7 @@ export async function upsertBillFromChargeItem(item: ChargeIngestItem, completed
   const customerCode = item.maKh;
   const amount = Math.round(item.soTienVnd);
   const companyName = item.tenKh.trim();
+  const evnPair = evnKyBillPairFromIngestItem(item);
 
   const existing = await ElectricBillRecord.findOne({ customerCode, year, month }).lean();
   const newPeriods = mergeScanAmountIntoPeriods(
@@ -40,6 +56,9 @@ export async function upsertBillFromChargeItem(item: ChargeIngestItem, completed
           periods: newPeriods,
           evn: item.nguon?.trim() || existing.evn || "EVNCPC",
           ...(companyName ? { company: companyName } : {}),
+          ...(evnPair
+            ? { evnKyBillThang: evnPair.thang, evnKyBillNam: evnPair.nam }
+            : {}),
         },
       }
     );
@@ -52,6 +71,7 @@ export async function upsertBillFromChargeItem(item: ChargeIngestItem, completed
       company: companyName || "",
       evn: item.nguon?.trim() || "EVNCPC",
       periods: newPeriods,
+      ...(evnPair ? { evnKyBillThang: evnPair.thang, evnKyBillNam: evnPair.nam } : {}),
     });
   }
 

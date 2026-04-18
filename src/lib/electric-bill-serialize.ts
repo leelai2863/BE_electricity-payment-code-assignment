@@ -79,14 +79,37 @@ export function serializeElectricBill(doc: ElectricBillRecordDocument | Record<s
       cardType: p?.cardType != null && String(p.cardType).trim() ? String(p.cardType) : null,
 
       dealCompletedAt: periodDeal ?? (ky === 1 ? legacyBillDeal : null),
+
+      evnPaymentDeadlineSyncStatus: p?.evnPaymentDeadlineSyncStatus
+        ? String(p.evnPaymentDeadlineSyncStatus)
+        : null,
+      evnPaymentDeadlineSyncError: p?.evnPaymentDeadlineSyncError
+        ? String(p.evnPaymentDeadlineSyncError)
+        : null,
+      evnPaymentDeadlineSyncedAt: iso(p?.evnPaymentDeadlineSyncedAt as Date | undefined),
+      evnPaymentDeadlineSyncKey: p?.evnPaymentDeadlineSyncKey ? String(p.evnPaymentDeadlineSyncKey) : null,
     };
   });
+
+  const evnT = d.evnKyBillThang;
+  const evnN = d.evnKyBillNam;
+  const rawT = evnT != null && Number.isFinite(Number(evnT)) ? Math.trunc(Number(evnT)) : null;
+  const rawN = evnN != null && Number.isFinite(Number(evnN)) ? Math.trunc(Number(evnN)) : null;
+  const pairOk =
+    rawT != null &&
+    rawN != null &&
+    rawT >= 1 &&
+    rawT <= 12 &&
+    rawN >= 2000 &&
+    rawN <= 2100;
 
   return {
     _id: String(d._id),
     customerCode: String(d.customerCode),
     month: Number(d.month),
     year: Number(d.year),
+    evnKyBillThang: pairOk ? rawT : null,
+    evnKyBillNam: pairOk ? rawN : null,
     monthLabel: String(d.monthLabel ?? ""),
     evn: String(d.evn ?? "EVNCPC"),
     company: String(d.company ?? ""),

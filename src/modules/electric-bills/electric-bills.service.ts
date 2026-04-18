@@ -1074,6 +1074,37 @@ export async function createManualElectricBill(body: Record<string, unknown>) {
   const evn = typeof body.evn === "string" && body.evn.trim() ? body.evn.trim() : "EVNCPC";
   const company = typeof body.company === "string" ? body.company.trim() : "";
 
+  let evnKyBillThang: number | null | undefined;
+  let evnKyBillNam: number | null | undefined;
+  const hasEvnT = "evnKyBillThang" in body;
+  const hasEvnN = "evnKyBillNam" in body;
+  if (hasEvnT !== hasEvnN) {
+    throw new ServiceError(400, "evnKyBillThang và evnKyBillNam phải cùng gửi hoặc cùng bỏ qua.");
+  }
+  if (hasEvnT && hasEvnN) {
+    const rawT = body.evnKyBillThang;
+    const rawN = body.evnKyBillNam;
+    const tEmpty = rawT === null || rawT === "";
+    const nEmpty = rawN === null || rawN === "";
+    if (tEmpty && nEmpty) {
+      evnKyBillThang = null;
+      evnKyBillNam = null;
+    } else if (tEmpty || nEmpty) {
+      throw new ServiceError(400, "evnKyBillThang và evnKyBillNam phải cùng để trống (null) hoặc cùng là số hợp lệ.");
+    } else {
+      const t = Number(rawT);
+      const n = Number(rawN);
+      if (!Number.isInteger(t) || t < 1 || t > 12) {
+        throw new ServiceError(400, "evnKyBillThang phải là số nguyên 1–12.");
+      }
+      if (!Number.isInteger(n) || n < 2000 || n > 2100) {
+        throw new ServiceError(400, "evnKyBillNam phải là năm 2000–2100.");
+      }
+      evnKyBillThang = t;
+      evnKyBillNam = n;
+    }
+  }
+
   const doc = new ElectricBillRecord({
     customerCode,
     month,
@@ -1082,6 +1113,8 @@ export async function createManualElectricBill(body: Record<string, unknown>) {
     evn,
     company,
     periods: periodsDtoToMongoSchema(periodsDto),
+    ...(evnKyBillThang !== undefined ? { evnKyBillThang } : {}),
+    ...(evnKyBillNam !== undefined ? { evnKyBillNam } : {}),
   });
   syncBillLevelFromPeriods(doc, periodsDto);
 
@@ -1120,7 +1153,13 @@ export async function createManualElectricBill(body: Record<string, unknown>) {
     action: "electric.manual_create",
     entityType: "ElectricBillRecord",
     entityId: doc._id,
-    metadata: { customerCode, month, year },
+    metadata: {
+      customerCode,
+      month,
+      year,
+      ...(evnKyBillThang !== undefined ? { evnKyBillThang } : {}),
+      ...(evnKyBillNam !== undefined ? { evnKyBillNam } : {}),
+    },
   });
 
   return {
@@ -1142,6 +1181,23 @@ export async function patchElectricBill(id: string, body: PatchBody) {
     const doc = await findElectricBillById(id);
     if (!doc) {
       throw new ServiceError(404, "Không tìm thấy bản ghi");
+    }
+
+    const actorRolesTop = Array.isArray(body.actorRoles)
+      ? body.actorRoles
+          .filter((x): x is string => typeof x === "string")
+          .map((x) => x.trim().toUpperCase())
+      : [];
+    const isAdminBillFields =
+      actorRolesTop.includes("ADMIN") || actorRolesTop.includes("SUPER_ADMIN");
+    if (
+      (body.evnKyBillThang !== undefined || body.evnKyBillNam !== undefined) &&
+      !isAdminBillFields
+    ) {
+      throw new ServiceError(
+        403,
+        "Chỉ ADMIN hoặc SUPER_ADMIN được chỉnh evnKyBillThang / evnKyBillNam (neo kỳ EVN cho đồng bộ hạn TT)."
+      );
     }
 
     let nextPeriods = serializeElectricBill(doc.toObject()).periods;
@@ -1285,6 +1341,34 @@ export async function patchElectricBill(id: string, body: PatchBody) {
     if (body.paymentConfirmed !== undefined) doc.set("paymentConfirmed", body.paymentConfirmed);
     if (body.cccdConfirmed !== undefined) doc.set("cccdConfirmed", body.cccdConfirmed);
     if (body.cardType !== undefined) doc.set("cardType", body.cardType ?? undefined);
+
+    if (body.evnKyBillThang !== undefined || body.evnKyBillNam !== undefined) {
+      if (body.evnKyBillThang === undefined || body.evnKyBillNam === undefined) {
+        throw new ServiceError(
+          400,
+          "Cập nhật kỳ EVN: gửi cả evnKyBillThang và evnKyBillNam (số hợp lệ hoặc cả hai null để xóa neo)."
+        );
+      }
+      const rawT = body.evnKyBillThang;
+      const rawN = body.evnKyBillNam;
+      if (rawT === null && rawN === null) {
+        doc.set("evnKyBillThang", null);
+        doc.set("evnKyBillNam", null);
+      } else if (rawT === null || rawN === null) {
+        throw new ServiceError(400, "evnKyBillThang và evnKyBillNam phải cùng null hoặc cùng là số hợp lệ.");
+      } else {
+        const t = Number(rawT);
+        const n = Number(rawN);
+        if (!Number.isInteger(t) || t < 1 || t > 12) {
+          throw new ServiceError(400, "evnKyBillThang phải là số nguyên 1–12.");
+        }
+        if (!Number.isInteger(n) || n < 2000 || n > 2100) {
+          throw new ServiceError(400, "evnKyBillNam phải là năm 2000–2100.");
+        }
+        doc.set("evnKyBillThang", t);
+        doc.set("evnKyBillNam", n);
+      }
+    }
 
     if (body.dealCompletedAt !== undefined && (body.dealCompletedAt === null || body.dealCompletedAt === "")) {
       doc.set("dealCompletedAt", undefined);

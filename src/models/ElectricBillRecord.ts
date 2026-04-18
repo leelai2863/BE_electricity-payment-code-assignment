@@ -16,6 +16,11 @@ const PeriodSchema = new Schema(
     customerName: { type: String, default: null },
     cardType: { type: String, default: null },
     dealCompletedAt: { type: Date, default: null },
+    /** Đồng bộ hạn TT từ AutoCheckEvn (trang chờ giao) */
+    evnPaymentDeadlineSyncStatus: { type: String, default: null },
+    evnPaymentDeadlineSyncError: { type: String, default: null },
+    evnPaymentDeadlineSyncedAt: { type: Date, default: null },
+    evnPaymentDeadlineSyncKey: { type: String, default: null },
   },
   { _id: false }
 );
@@ -25,6 +30,12 @@ const ElectricBillRecordSchema = new Schema(
     customerCode: { type: String, required: true, trim: true, index: true },
     month: { type: Number, required: true, min: 1, max: 12 },
     year: { type: Number, required: true, index: true },
+    /**
+     * Tháng/năm trên kỳ hóa đơn EVN (kyBill.thang / kyBill.nam) khi khác month/year của bản ghi refu.
+     * Đồng bộ hạn thanh toán AutoCheck ưu tiên các field này để khớp đúng chu kỳ thông báo.
+     */
+    evnKyBillThang: { type: Number, min: 1, max: 12, default: null },
+    evnKyBillNam: { type: Number, min: 2000, max: 2100, default: null },
     monthLabel: { type: String, default: "" },
     evn: { type: String, default: "EVNCPC" },
     company: { type: String, default: "" },
