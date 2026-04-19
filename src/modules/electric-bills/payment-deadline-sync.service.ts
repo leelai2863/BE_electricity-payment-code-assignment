@@ -260,6 +260,7 @@ async function resolvePaymentDueWithPastKyEscalation(
   startKy: 1 | 2 | 3,
   billThang: number,
   billNam: number,
+  opts?: { allowAssignedStartKy?: boolean },
 ): Promise<ResolvedPaymentDue> {
   const ma = bill.customerCode.trim();
   const call = (ky: 1 | 2 | 3) =>
@@ -275,20 +276,20 @@ async function resolvePaymentDueWithPastKyEscalation(
   const successes: Array<{ ky: 1 | 2 | 3; hanThanhToanIso: string }> = [];
   let lastNonOk: ResolvedPaymentDue | null = null;
 
+  const allowAssignedStartKy = Boolean(opts?.allowAssignedStartKy);
+
   for (let k = startKy; k <= kyEnd; k++) {
     const ky = k as 1 | 2 | 3;
     const pRow = bill.periods.find((p) => p.ky === ky);
-    if (pRow && !periodNeedsAssignment(pRow)) {
-      if (k === startKy) {
+    if (k === startKy) {
+      if (pRow && !periodNeedsAssignment(pRow) && !allowAssignedStartKy) {
         return { ok: false, status: 0, message: `Kỳ ${ky} đã gán đại lý — không tra payment-due.` };
       }
-      continue;
-    }
-    if (k === startKy) {
       if (!pRow || pRow.amount == null || !Number.isFinite(pRow.amount)) {
         return { ok: false, status: 0, message: `Kỳ ${ky} thiếu số tiền trên hóa đơn.` };
       }
     }
+    // k > startKy: luôn gọi payment-due (hạn EVN có thể ở kỳ cao hơn dù CRM đã giao kỳ đó).
 
     const r = await call(ky);
     if (!r.ok) {
@@ -429,6 +430,7 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
         job.ky,
         billThang,
         billNam,
+        { allowAssignedStartKy: Boolean(job.allowAssignedKy) },
       );
       if (resolved.ok) {
         const finalKy = resolved.ky;
@@ -544,7 +546,7 @@ export type EnqueueUnassignedPaymentDeadlineBody = {
   };
 };
 
-function parseTargetedPaymentDeadline(raw: unknown): {
+export function parseTargetedPaymentDeadline(raw: unknown): {
   billId: string;
   ky: 1 | 2 | 3;
   billingThang: number;
