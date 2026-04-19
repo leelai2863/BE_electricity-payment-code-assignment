@@ -323,17 +323,37 @@ function applyPeriodSyncFields(
 }
 
 /**
- * EVN chốt `finalKy` > `jobKy` nhưng tiền/quét đang nằm nhầm ở `jobKy` (thiết kế cũ: vào trước = k1).
- * Chuyển các field hóa đơn sang đúng slot kỳ khi ô `finalKy` chưa có tiền và cả hai kỳ vẫn chờ giao.
+ * Chọn kỳ nguồn có tiền để gom sang `finalKy` khi ô đích chưa có amount (tiền nhầm slot k1, hạn EVN ở k2, kể cả job.ky === finalKy).
  */
-function relocateUnassignedBillingFromJobKyToFinalKy(
+function pickSourceKyForRelocateToFinalKy(
   periods: ElectricBillPeriod[],
   jobKy: 1 | 2 | 3,
   finalKy: 1 | 2 | 3,
-): ElectricBillPeriod[] {
-  if (finalKy <= jobKy) return periods;
-  const src = periods.find((p) => p.ky === jobKy);
+): 1 | 2 | 3 | null {
   const dst = periods.find((p) => p.ky === finalKy);
+  if (!dst) return null;
+  if (dst.amount != null && Number.isFinite(dst.amount)) return null;
+  const candidates = periods.filter(
+    (p) =>
+      periodNeedsAssignment(p) && p.amount != null && Number.isFinite(p.amount) && p.ky !== finalKy,
+  );
+  if (candidates.length === 0) return null;
+  if (candidates.some((p) => p.ky === jobKy)) return jobKy;
+  candidates.sort((a, b) => a.ky - b.ky);
+  return candidates[0]!.ky;
+}
+
+/**
+ * Chuyển tiền + meta quét từ `sourceKy` sang `targetKy` (cả hai chờ giao; đích chưa có tiền).
+ */
+function relocateUnassignedBillingSourceKyToTargetKy(
+  periods: ElectricBillPeriod[],
+  sourceKy: 1 | 2 | 3,
+  targetKy: 1 | 2 | 3,
+): ElectricBillPeriod[] {
+  if (sourceKy === targetKy) return periods;
+  const src = periods.find((p) => p.ky === sourceKy);
+  const dst = periods.find((p) => p.ky === targetKy);
   if (!src || !dst) return periods;
   if (!periodNeedsAssignment(src) || !periodNeedsAssignment(dst)) return periods;
   if (src.amount == null || !Number.isFinite(src.amount)) return periods;
@@ -352,14 +372,14 @@ function relocateUnassignedBillingFromJobKyToFinalKy(
   ];
 
   return periods.map((p) => {
-    if (p.ky === finalKy) {
+    if (p.ky === targetKy) {
       const merged = { ...p } as ElectricBillPeriod;
       for (const k of keys) {
         (merged as unknown as Record<string, unknown>)[k as string] = src[k] as unknown;
       }
       return merged;
     }
-    if (p.ky === jobKy) {
+    if (p.ky === sourceKy) {
       const cleared = { ...p } as ElectricBillPeriod;
       for (const k of keys) {
         if (k === "amount") (cleared as unknown as Record<string, unknown>).amount = null;
@@ -482,11 +502,13 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
         const finalKy = resolved.ky;
         const slotFinalBefore = next.find((p) => p.ky === finalKy);
         if (
-          finalKy > job.ky &&
           slotFinalBefore &&
           (slotFinalBefore.amount == null || !Number.isFinite(slotFinalBefore.amount))
         ) {
-          next = relocateUnassignedBillingFromJobKyToFinalKy(next, job.ky, finalKy);
+          const srcKy = pickSourceKyForRelocateToFinalKy(next, job.ky, finalKy);
+          if (srcKy != null && srcKy !== finalKy) {
+            next = relocateUnassignedBillingSourceKyToTargetKy(next, srcKy, finalKy);
+          }
         }
         const periodFinal = next.find((p) => p.ky === finalKy);
         const amtFinal = amountForFinalKy(job, period, finalKy, periodFinal, amt);
