@@ -27,6 +27,8 @@ export type PaymentDeadlineSyncJob = {
   billingNam?: number | null;
   /** Khi true: mọi lỗi/404 không ghi đè trạng thái cũ — khôi phục snapshot trước khi chạy. */
   revertOnFailure?: boolean;
+  /** Chỉ từ UI targeted: cho phép kỳ đã giao đại lý vẫn gọi AutoCheck (sửa dữ liệu EVN). */
+  allowAssignedKy?: boolean;
 };
 
 const queue: PaymentDeadlineSyncJob[] = [];
@@ -303,7 +305,10 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
 
   const bill = serializeElectricBill(raw as unknown as Record<string, unknown>);
   const period = bill.periods.find((p) => p.ky === job.ky);
-  if (!period || period.amount == null || !periodNeedsAssignment(period)) {
+  if (!period || period.amount == null) {
+    return;
+  }
+  if (!job.allowAssignedKy && !periodNeedsAssignment(period)) {
     return;
   }
 
@@ -583,8 +588,8 @@ export async function enqueueUnassignedPaymentDeadlineSync(
     }
     const bill = serializeElectricBill(raw as unknown as Record<string, unknown>);
     const p = bill.periods.find((x) => x.ky === targeted.ky);
-    if (!p || p.amount == null || !periodNeedsAssignment(p)) {
-      throw new ServiceError(400, "Kỳ chọn không có tiền hoặc đã được giao đại lý.");
+    if (!p || p.amount == null) {
+      throw new ServiceError(400, "Kỳ chọn không có số tiền trên hóa đơn.");
     }
     let enqueued = 0;
     let duplicate = 0;
@@ -598,6 +603,7 @@ export async function enqueueUnassignedPaymentDeadlineSync(
       billingThang: targeted.billingThang,
       billingNam: targeted.billingNam,
       revertOnFailure: true,
+      allowAssignedKy: true,
     });
     if (r === "queued") enqueued += 1;
     else if (r === "duplicate") duplicate += 1;
