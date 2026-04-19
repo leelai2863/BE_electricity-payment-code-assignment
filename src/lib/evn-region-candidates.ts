@@ -21,10 +21,11 @@ const PREFIX_TO_REGION_KEY_CANDIDATES: Record<string, readonly string[]> = {
   PE: [REGION_KEYS.HCM, REGION_KEYS.NAM],
   HN: [REGION_KEYS.HN, REGION_KEYS.BAC],
   PD: [REGION_KEYS.HN, REGION_KEYS.BAC],
-  PA: [REGION_KEYS.BAC, REGION_KEYS.HN],
-  PH: [REGION_KEYS.BAC, REGION_KEYS.HN],
-  PM: [REGION_KEYS.BAC, REGION_KEYS.HN],
-  PN: [REGION_KEYS.BAC, REGION_KEYS.HN],
+  /** Mã Bắc (PA/PH/PM/PN) — AutoCheck NPC; không thử Hà Nội (tránh GET payment-due oan). */
+  PA: [REGION_KEYS.BAC],
+  PH: [REGION_KEYS.BAC],
+  PM: [REGION_KEYS.BAC],
+  PN: [REGION_KEYS.BAC],
 };
 
 export type AutocheckRegionScope = "EVN_CPC" | "EVN_NPC" | "EVN_HANOI";
@@ -62,21 +63,23 @@ export function billEvnFieldToPrimaryScope(evnRaw: string | undefined | null): A
 }
 
 /**
- * Danh sách region query cho GET payment-due (thứ tự ưu tiên).
- * - Ưu tiên `evn` đã lưu trên bill (từ job quét).
- * - Sau đó thử theo đầu mã (fallback khi evn sai / trống).
+ * Danh sách region cho GET payment-due.
+ * - Nếu bill đã có `evn` nhận ra được → **chỉ** vùng đó (tránh PA/NPC bị gọi thêm HANOI).
+ * - Không có `evn` → thử theo đầu mã (prefix map).
  */
 export function buildPaymentDueRegionCandidates(
   customerCode: string,
   billEvnField: string | undefined | null,
 ): AutocheckRegionScope[] {
+  const primary = billEvnFieldToPrimaryScope(billEvnField);
+  if (primary) {
+    return [primary];
+  }
+
   const out: AutocheckRegionScope[] = [];
   const push = (r: AutocheckRegionScope) => {
     if (!out.includes(r)) out.push(r);
   };
-
-  const primary = billEvnFieldToPrimaryScope(billEvnField);
-  if (primary) push(primary);
 
   const raw = (customerCode ?? "").trim().toUpperCase();
   const prefix = raw.length >= 2 ? raw.slice(0, 2) : "";

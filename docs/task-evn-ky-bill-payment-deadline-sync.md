@@ -41,7 +41,7 @@ Chi tiết handler nằm trong `electric-bills.controller.ts` / `electric-bills.
 
 - **Theo job (`billId` + kỳ)**: giữa hai lần **xếp hàng** cùng job, phải cách một khoảng tối thiểu (mặc định **30s** khi `force: false`, **12s** khi `force: true`). Nếu gọi quá sớm, job không vào hàng đợi — response có `cooldown` (số lần bị từ chối theo kỳ).
 - **POST không truyền `billIds`** (đồng bộ toàn bộ chờ giao trên server): tối thiểu **120s** giữa hai lần (mặc định); nếu quá sớm trả **HTTP 429** và message tiếng Việt. Truyền `billIds` cụ thể không áp dụng hạn chế này.
-- **CRM**: tự động xếp hàng khi có bill **thiếu hạn hoặc hạn đã quá (VN)** trên `rows` (không phụ thuộc filter); cùng tập `billId` không gửi lại trong **45s**. Nút **“Lấy lại hạn TT (EVN)”**: tối thiểu **12s** giữa hai lần bấm (phía client).
+- **CRM**: **không** tự động xếp hàng khi mở/refresh trang — tránh mọi user vào trang là gọi AutoCheck. Dùng nút **“Lấy lại hạn TT (EVN)”** (tối thiểu **12s** giữa hai lần bấm) hoặc **Force** trên từng hàng.
 
 ## Biến môi trường (Assign-refu-manager-service)
 

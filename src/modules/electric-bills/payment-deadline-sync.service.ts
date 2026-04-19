@@ -286,8 +286,7 @@ async function resolvePaymentDueWithPastKyEscalation(
         return { ok: false, status: 0, message: `Kỳ ${ky} thiếu số tiền trên hóa đơn.` };
       }
     } else {
-      if (!pRow) break;
-      if (!periodNeedsAssignment(pRow)) break;
+      if (pRow && !periodNeedsAssignment(pRow)) break;
     }
 
     const r = await call(ky);
@@ -312,8 +311,7 @@ async function resolvePaymentDueWithPastKyEscalation(
     for (let u = ky + 1; u <= 3; u += 1) {
       const kyUp = u as 1 | 2 | 3;
       const pUp = bill.periods.find((p) => p.ky === kyUp);
-      if (!pUp || !periodNeedsAssignment(pUp)) break;
-      if (pUp.amount == null || !Number.isFinite(pUp.amount)) break;
+      if (pUp && !periodNeedsAssignment(pUp)) break;
       const rUp = await call(kyUp);
       if (!rUp.ok) break;
       bestKy = kyUp;
