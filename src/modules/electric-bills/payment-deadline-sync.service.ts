@@ -248,9 +248,9 @@ type ResolvedPaymentDue =
   | { ok: false; status: number; code?: string; message: string };
 
 /**
- * Gọi `payment-due` lần lượt cho **mọi kỳ** `startKy…3` (khi `PAYMENT_DEADLINE_ESCALATE_PAST_KY` bật),
- * rồi chọn kết quả có **hạn thanh toán mới nhất** (timestamp ISO). Như vậy log AutoCheck luôn thấy ky=2/3 khi có dữ liệu,
- * không phụ thuộc “so ngày VN có nhận ra quá hạn hay không”.
+ * Gọi `payment-due` lần lượt cho **mọi kỳ** `startKy…3` (khi `PAYMENT_DEADLINE_ESCALATE_PAST_KY` bật).
+ * Nếu **một** kỳ trả 200: dùng đúng kỳ đó (hành vi cũ).
+ * Nếu **từ hai kỳ trở lên** trả 200: ưu tiên **kỳ số cao hơn** làm nguồn sự thật EVN (kỳ sau thay thế kỳ trước), không so ngày hạn.
  * Khi escalate tắt: chỉ gọi đúng `startKy` (một GET).
  */
 async function resolvePaymentDueWithPastKyEscalation(
@@ -305,17 +305,12 @@ async function resolvePaymentDueWithPastKyEscalation(
     return lastNonOk ?? { ok: false, status: 404, message: "Không có payment-due cho các kỳ đã thử." };
   }
 
-  const ts = (iso: string) => {
-    const t = Date.parse(iso);
-    return Number.isFinite(t) ? t : 0;
-  };
-  const best = successes.reduce((a, b) => {
-    const da = ts(a.hanThanhToanIso);
-    const db = ts(b.hanThanhToanIso);
-    if (db !== da) return db > da ? b : a;
-    return b.ky > a.ky ? b : a;
-  });
+  if (successes.length === 1) {
+    const only = successes[0]!;
+    return { ok: true, hanThanhToanIso: only.hanThanhToanIso, ky: only.ky };
+  }
 
+  const best = successes.reduce((a, b) => (b.ky > a.ky ? b : a));
   return { ok: true, hanThanhToanIso: best.hanThanhToanIso, ky: best.ky };
 }
 
