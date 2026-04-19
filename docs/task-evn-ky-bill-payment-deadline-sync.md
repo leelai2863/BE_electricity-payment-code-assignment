@@ -39,9 +39,9 @@ Chi tiết handler nằm trong `electric-bills.controller.ts` / `electric-bills.
 
 ## Giới hạn tần suất (tránh spam AutoCheck / captcha)
 
-- **Theo job (`billId` + kỳ)**: giữa hai lần **xếp hàng** cùng job, phải cách một khoảng tối thiểu (mặc định **120s** khi `force: false`, **45s** khi `force: true`). Nếu gọi quá sớm, job không vào hàng đợi — response có `cooldown` (số lần bị từ chối theo kỳ).
+- **Theo job (`billId` + kỳ)**: giữa hai lần **xếp hàng** cùng job, phải cách một khoảng tối thiểu (mặc định **30s** khi `force: false`, **12s** khi `force: true`). Nếu gọi quá sớm, job không vào hàng đợi — response có `cooldown` (số lần bị từ chối theo kỳ).
 - **POST không truyền `billIds`** (đồng bộ toàn bộ chờ giao trên server): tối thiểu **120s** giữa hai lần (mặc định); nếu quá sớm trả **HTTP 429** và message tiếng Việt. Truyền `billIds` cụ thể không áp dụng hạn chế này.
-- **CRM**: tự động xếp hàng **một lần** sau khi tải danh sách (các bill thiếu hạn TT), **không** lặp lại khi đổi bộ lọc. Nút **“Lấy lại hạn TT (EVN)”**: tối thiểu **60s** giữa hai lần bấm (phía client).
+- **CRM**: tự động xếp hàng khi có bill **thiếu hạn hoặc hạn đã quá (VN)** trên `rows` (không phụ thuộc filter); cùng tập `billId` không gửi lại trong **45s**. Nút **“Lấy lại hạn TT (EVN)”**: tối thiểu **12s** giữa hai lần bấm (phía client).
 
 ## Biến môi trường (Assign-refu-manager-service)
 
@@ -56,8 +56,8 @@ Chỉ tên biến — giá trị đặt trên server, **không** commit file `.e
 | `AUTOCHECK_EVN_TASK_POLL_MS` / `AUTOCHECK_EVN_TASK_POLL_MAX_MS` | Poll task CPC sau `POST /api/tasks`. |
 | `PAYMENT_DEADLINE_CPC_SCRAPE_ON_404` | Chỉ khi giá trị **`true`**: sau 404 toàn vùng, gọi `POST /api/tasks` quét CPC theo kỳ/tháng (AutoCheck xử lý **hàng loạt mã**, không phải một bill). **Mặc định tắt** — tránh một job làm quét cả danh sách. |
 | `PAYMENT_DEADLINE_SYNC_TICK_MS` | Chu kỳ worker queue (mặc định 700). |
-| `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS` | Khoảng cách tối thiểu giữa hai lần xếp hàng cùng bill+kỳ khi **không** `force` (mặc định 120000). |
-| `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS` | Tương tự khi `force: true` (mặc định 45000). |
+| `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS` | Khoảng cách tối thiểu giữa hai lần xếp hàng cùng bill+kỳ khi **không** `force` (mặc định 30000). |
+| `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS` | Tương tự khi `force: true` (mặc định 12000). |
 | `PAYMENT_DEADLINE_SYNC_EMPTY_BILL_IDS_COOLDOWN_MS` | POST **không** có `billIds` — khoảng cách tối thiểu (mặc định 120000). |
 | `PAYMENT_DEADLINE_ESCALATE_PAST_KY` | `false` để tắt toàn bộ: (1) xếp hàng vẫn **bỏ qua** kỳ đã có hạn; (2) worker **không** leo k+1 khi hạn trả về đã qua. Khi bật (mặc định): kỳ đã đồng bộ `ok` nhưng hạn **&lt; hôm nay (VN)** vẫn có thể được xếp hàng lại; sau `payment-due` nếu hạn vẫn quá hạn thì gọi tiếp k+1..3 (kỳ có tiền + chưa gán đại lý). |
 | `CHECKBILL_INGEST_SECRET` | Xác thực ingest snapshot (Bearer / `x-api-key`). |
