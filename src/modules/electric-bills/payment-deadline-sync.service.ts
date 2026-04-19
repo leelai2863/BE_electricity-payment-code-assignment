@@ -322,6 +322,45 @@ function applyPeriodSyncFields(
   return periods.map((p) => (p.ky === ky ? ({ ...p, ...patch } as ElectricBillPeriod) : p));
 }
 
+/** Kỳ EVN đã chốt (chờ giao): ok + có hạn, ưu tiên số kỳ lớn nhất — khớp cột CRM "Kỳ chốt". */
+function findEvnTruthKyUnassigned(periods: ElectricBillPeriod[]): 1 | 2 | 3 | null {
+  const candidates = periods.filter(
+    (p) =>
+      periodNeedsAssignment(p) &&
+      (p.evnPaymentDeadlineSyncStatus ?? "").trim() === "ok" &&
+      p.paymentDeadline != null &&
+      String(p.paymentDeadline).trim() !== "",
+  );
+  if (candidates.length === 0) return null;
+  return candidates.reduce((a, b) => (b.ky > a.ky ? b : a)).ky;
+}
+
+/**
+ * Gom tiền + meta quét sang đúng slot kỳ EVN đã chốt (sửa bản ghi Mongo đã lệch trước khi có relocate).
+ * Dùng cho script migrate một lần; logic relocate giống nhánh thành công trong `runOneJob`.
+ */
+export function repairSplitBillAmountIntoEvnTruthKySlot(periods: ElectricBillPeriod[]): {
+  next: ElectricBillPeriod[];
+  changed: boolean;
+} {
+  const truthKy = findEvnTruthKyUnassigned(periods);
+  if (truthKy == null) return { next: periods, changed: false };
+  const slotFinal = periods.find((p) => p.ky === truthKy);
+  if (!slotFinal) return { next: periods, changed: false };
+  if (slotFinal.amount != null && Number.isFinite(slotFinal.amount)) {
+    return { next: periods, changed: false };
+  }
+  const withAmt = periods.filter(
+    (p) => periodNeedsAssignment(p) && p.amount != null && Number.isFinite(p.amount),
+  );
+  if (withAmt.length === 0) return { next: periods, changed: false };
+  const jobKy = withAmt.reduce((a, b) => (a.ky < b.ky ? a : b)).ky;
+  const srcKy = pickSourceKyForRelocateToFinalKy(periods, jobKy, truthKy);
+  if (srcKy == null || srcKy === truthKy) return { next: periods, changed: false };
+  const next = relocateUnassignedBillingSourceKyToTargetKy(periods, srcKy, truthKy);
+  return { next, changed: true };
+}
+
 /**
  * Chọn kỳ nguồn có tiền để gom sang `finalKy` khi ô đích chưa có amount (tiền nhầm slot k1, hạn EVN ở k2, kể cả job.ky === finalKy).
  */

@@ -75,6 +75,12 @@ Khi ô `finalKy` **chưa có `amount`**, worker chọn **kỳ nguồn** (`pickSo
 
 CRM: cột **Kỳ** (trước là “EVN”) ưu tiên hiển thị kỳ có `evnPaymentDeadlineSyncStatus: ok` + hạn, **ky cao nhất**; chưa đồng bộ thì fallback theo các kỳ có tiền chờ giao.
 
+### Sửa dữ liệu Mongo đã lệch (một lần)
+
+Worker khi đồng bộ hạn TT **đã ghi Mongo** (không chỉ UI). Các bản ghi sai **trước** khi deploy bản relocate / repair cần **chạy lại sync** hoặc chạy script:
+
+`npm run migrate:normalize-evn-period-slots` — mặc định **dry-run** (chỉ log). Ghi DB: `MIGRATE_APPLY=true` rồi chạy lại (cùng `MONGODB_URI`). Hàm `repairSplitBillAmountIntoEvnTruthKySlot` export từ `payment-deadline-sync.service.ts`.
+
 ## Liên quan
 
 - `docs/task-evn-ky-bill-payment-deadline-sync.md` — mô tả luồng tổng thể task.
