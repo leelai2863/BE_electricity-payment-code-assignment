@@ -29,6 +29,11 @@ export type PaymentDeadlineSyncJob = {
   revertOnFailure?: boolean;
   /** Chỉ từ UI targeted: cho phép kỳ đã giao đại lý vẫn gọi AutoCheck (sửa dữ liệu EVN). */
   allowAssignedKy?: boolean;
+  /**
+   * Kỳ đích không có `amount` trên Mongo nhưng vẫn hỏi AutoCheck theo đúng ky/tháng/năm;
+   * dùng số tiền tham chiếu (max các kỳ khác có tiền) cho fingerprint / syncKey — API payment-due không cần tiền.
+   */
+  billingAmountForSync?: number;
 };
 
 const queue: PaymentDeadlineSyncJob[] = [];
@@ -298,6 +303,33 @@ async function saveBillPeriods(billId: string, periods: ElectricBillPeriod[]): P
   await doc.save();
 }
 
+function amountForPaymentDeadlineJob(job: PaymentDeadlineSyncJob, period: ElectricBillPeriod): number | null {
+  if (period.amount != null && Number.isFinite(period.amount)) {
+    return Math.round(period.amount);
+  }
+  if (job.billingAmountForSync != null && Number.isFinite(job.billingAmountForSync)) {
+    return Math.round(job.billingAmountForSync);
+  }
+  return null;
+}
+
+/** Số tiền dùng cho syncKey khi periodFinal không có amount nhưng trùng kỳ job (targeted + kỳ chưa có tiền). */
+function amountForFinalKy(
+  job: PaymentDeadlineSyncJob,
+  periodAtJobKy: ElectricBillPeriod,
+  finalKy: 1 | 2 | 3,
+  periodFinal: ElectricBillPeriod | undefined,
+  fallbackAmt: number,
+): number | null {
+  if (periodFinal?.amount != null && Number.isFinite(periodFinal.amount)) {
+    return Math.round(periodFinal.amount);
+  }
+  if (finalKy === job.ky) {
+    return fallbackAmt;
+  }
+  return null;
+}
+
 async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
   const cfg = readAutocheckEvnClientConfig();
   const raw = await findElectricBillById(job.billId);
@@ -305,7 +337,11 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
 
   const bill = serializeElectricBill(raw as unknown as Record<string, unknown>);
   const period = bill.periods.find((p) => p.ky === job.ky);
-  if (!period || period.amount == null) {
+  if (!period) {
+    return;
+  }
+  const amt = amountForPaymentDeadlineJob(job, period);
+  if (amt == null) {
     return;
   }
   if (!job.allowAssignedKy && !periodNeedsAssignment(period)) {
@@ -313,7 +349,7 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
   }
 
   const { thang: billThang, nam: billNam } = effectiveBillingThangNam(job, bill);
-  const syncKey = computeSyncFingerprint(billNam, billThang, job.ky, period.amount);
+  const syncKey = computeSyncFingerprint(billNam, billThang, job.ky, amt);
   if (shouldSkipByState(period, syncKey, job.force)) {
     return;
   }
@@ -367,7 +403,7 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       if (resolved.ok) {
         const finalKy = resolved.ky;
         const periodFinal = bill.periods.find((p) => p.ky === finalKy);
-        const amtFinal = periodFinal?.amount;
+        const amtFinal = amountForFinalKy(job, period, finalKy, periodFinal, amt);
         if (amtFinal == null) {
           lastMessage = `${region}: thiếu số tiền kỳ ${finalKy}`;
           continue;
@@ -440,7 +476,7 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       if (r2.ok) {
         const finalKy = r2.ky;
         const periodFinal = billAfterCpc.periods.find((p) => p.ky === finalKy);
-        const amtFinal = periodFinal?.amount;
+        const amtFinal = amountForFinalKy(job, period, finalKy, periodFinal, amt);
         if (amtFinal != null) {
           const syncKeyFinal = computeSyncFingerprint(billNam, billThang, finalKy, amtFinal);
           if (finalKy !== job.ky) {
@@ -588,8 +624,21 @@ export async function enqueueUnassignedPaymentDeadlineSync(
     }
     const bill = serializeElectricBill(raw as unknown as Record<string, unknown>);
     const p = bill.periods.find((x) => x.ky === targeted.ky);
-    if (!p || p.amount == null) {
-      throw new ServiceError(400, "Kỳ chọn không có số tiền trên hóa đơn.");
+    if (!p) {
+      throw new ServiceError(400, "Không tìm thấy kỳ trên hóa đơn.");
+    }
+    let billingAmountForSync: number | undefined;
+    if (p.amount == null || !Number.isFinite(p.amount)) {
+      const refAmounts = bill.periods
+        .filter((x) => x.ky !== targeted.ky && x.amount != null && Number.isFinite(x.amount))
+        .map((x) => Math.round(Number(x.amount)));
+      if (refAmounts.length === 0) {
+        throw new ServiceError(
+          400,
+          "Kỳ chọn chưa có số tiền và không có kỳ khác trên hóa đơn có tiền — hãy bổ sung amount cho kỳ trên hóa đơn.",
+        );
+      }
+      billingAmountForSync = Math.max(...refAmounts);
     }
     let enqueued = 0;
     let duplicate = 0;
@@ -604,6 +653,7 @@ export async function enqueueUnassignedPaymentDeadlineSync(
       billingNam: targeted.billingNam,
       revertOnFailure: true,
       allowAssignedKy: true,
+      ...(billingAmountForSync != null ? { billingAmountForSync } : {}),
     });
     if (r === "queued") enqueued += 1;
     else if (r === "duplicate") duplicate += 1;
