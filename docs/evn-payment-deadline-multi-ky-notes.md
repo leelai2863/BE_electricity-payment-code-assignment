@@ -69,6 +69,12 @@ Hai lớp:
 - `electric-bills.controller.ts` — `postUnassignedPaymentDeadlineSyncHandler` (`targeted`)
 - `AssignCodesModule.tsx` — `assignTablePrimaryPeriod`, Force modal → `submitForceEvnTargetedSync`
 
+## Chuẩn hóa slot tiền theo kỳ EVN (sau ~04/2026)
+
+Khi `payment-due` chốt `finalKy > jobKy` và ô `finalKy` **chưa có `amount`**, worker gọi `relocateUnassignedBillingFromJobKyToFinalKy`: chuyển `amount`, `scanDate`, `scanDdMm`, `ca`, tên/thẻ/giao dịch từ kỳ job sang kỳ chốt, rồi xóa các field đó trên kỳ job (tránh “tiền kỳ 2 nằm nhầm slot k1” giữa chu kỳ).
+
+CRM: cột **Kỳ** (trước là “EVN”) ưu tiên hiển thị kỳ có `evnPaymentDeadlineSyncStatus: ok` + hạn, **ky cao nhất**; chưa đồng bộ thì fallback theo các kỳ có tiền chờ giao.
+
 ## Liên quan
 
 - `docs/task-evn-ky-bill-payment-deadline-sync.md` — mô tả luồng tổng thể task.

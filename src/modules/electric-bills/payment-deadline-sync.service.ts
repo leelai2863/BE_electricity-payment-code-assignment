@@ -322,6 +322,57 @@ function applyPeriodSyncFields(
   return periods.map((p) => (p.ky === ky ? ({ ...p, ...patch } as ElectricBillPeriod) : p));
 }
 
+/**
+ * EVN chốt `finalKy` > `jobKy` nhưng tiền/quét đang nằm nhầm ở `jobKy` (thiết kế cũ: vào trước = k1).
+ * Chuyển các field hóa đơn sang đúng slot kỳ khi ô `finalKy` chưa có tiền và cả hai kỳ vẫn chờ giao.
+ */
+function relocateUnassignedBillingFromJobKyToFinalKy(
+  periods: ElectricBillPeriod[],
+  jobKy: 1 | 2 | 3,
+  finalKy: 1 | 2 | 3,
+): ElectricBillPeriod[] {
+  if (finalKy <= jobKy) return periods;
+  const src = periods.find((p) => p.ky === jobKy);
+  const dst = periods.find((p) => p.ky === finalKy);
+  if (!src || !dst) return periods;
+  if (!periodNeedsAssignment(src) || !periodNeedsAssignment(dst)) return periods;
+  if (src.amount == null || !Number.isFinite(src.amount)) return periods;
+  if (dst.amount != null && Number.isFinite(dst.amount)) return periods;
+
+  const keys: (keyof ElectricBillPeriod)[] = [
+    "amount",
+    "scanDate",
+    "scanDdMm",
+    "ca",
+    "customerName",
+    "cardType",
+    "paymentConfirmed",
+    "cccdConfirmed",
+    "dealCompletedAt",
+  ];
+
+  return periods.map((p) => {
+    if (p.ky === finalKy) {
+      const merged = { ...p } as ElectricBillPeriod;
+      for (const k of keys) {
+        (merged as unknown as Record<string, unknown>)[k as string] = src[k] as unknown;
+      }
+      return merged;
+    }
+    if (p.ky === jobKy) {
+      const cleared = { ...p } as ElectricBillPeriod;
+      for (const k of keys) {
+        if (k === "amount") (cleared as unknown as Record<string, unknown>).amount = null;
+        else if (k === "paymentConfirmed" || k === "cccdConfirmed")
+          (cleared as unknown as Record<string, unknown>)[k as string] = false;
+        else (cleared as unknown as Record<string, unknown>)[k as string] = null;
+      }
+      return cleared;
+    }
+    return p;
+  });
+}
+
 async function saveBillPeriods(billId: string, periods: ElectricBillPeriod[]): Promise<void> {
   const doc = await ElectricBillRecord.findById(new mongoose.Types.ObjectId(billId));
   if (!doc) return;
@@ -429,7 +480,15 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       );
       if (resolved.ok) {
         const finalKy = resolved.ky;
-        const periodFinal = bill.periods.find((p) => p.ky === finalKy);
+        const slotFinalBefore = next.find((p) => p.ky === finalKy);
+        if (
+          finalKy > job.ky &&
+          slotFinalBefore &&
+          (slotFinalBefore.amount == null || !Number.isFinite(slotFinalBefore.amount))
+        ) {
+          next = relocateUnassignedBillingFromJobKyToFinalKy(next, job.ky, finalKy);
+        }
+        const periodFinal = next.find((p) => p.ky === finalKy);
         const amtFinal = amountForFinalKy(job, period, finalKy, periodFinal, amt);
         if (amtFinal == null) {
           lastMessage = `${region}: thiếu số tiền kỳ ${finalKy}`;
