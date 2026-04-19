@@ -116,6 +116,12 @@ function periodNeedsAssignment(p: ElectricBillPeriod): boolean {
   return !ag;
 }
 
+/** Kỳ chưa gán đại lý (không yêu cầu có tiền — dùng cho ô đích EVN chỉ có hạn, tiền đang nằm nhầm kỳ khác). */
+function periodUnassignedForAgency(p: ElectricBillPeriod): boolean {
+  const ag = (p.assignedAgencyId ?? "").trim();
+  return !ag;
+}
+
 function shouldSkipByState(
   p: ElectricBillPeriod,
   syncKey: string,
@@ -326,7 +332,7 @@ function applyPeriodSyncFields(
 function findEvnTruthKyUnassigned(periods: ElectricBillPeriod[]): 1 | 2 | 3 | null {
   const candidates = periods.filter(
     (p) =>
-      periodNeedsAssignment(p) &&
+      periodUnassignedForAgency(p) &&
       (p.evnPaymentDeadlineSyncStatus ?? "").trim() === "ok" &&
       p.paymentDeadline != null &&
       String(p.paymentDeadline).trim() !== "",
@@ -358,6 +364,7 @@ export function repairSplitBillAmountIntoEvnTruthKySlot(periods: ElectricBillPer
   const srcKy = pickSourceKyForRelocateToFinalKy(periods, jobKy, truthKy);
   if (srcKy == null || srcKy === truthKy) return { next: periods, changed: false };
   const next = relocateUnassignedBillingSourceKyToTargetKy(periods, srcKy, truthKy);
+  if (next === periods) return { next: periods, changed: false };
   return { next, changed: true };
 }
 
@@ -394,7 +401,8 @@ function relocateUnassignedBillingSourceKyToTargetKy(
   const src = periods.find((p) => p.ky === sourceKy);
   const dst = periods.find((p) => p.ky === targetKy);
   if (!src || !dst) return periods;
-  if (!periodNeedsAssignment(src) || !periodNeedsAssignment(dst)) return periods;
+  // Nguồn phải có tiền + chưa giao đại lý; đích chưa giao đại lý và chưa có tiền (nhận gom từ kỳ EVN chốt hạn).
+  if (!periodNeedsAssignment(src) || !periodUnassignedForAgency(dst)) return periods;
   if (src.amount == null || !Number.isFinite(src.amount)) return periods;
   if (dst.amount != null && Number.isFinite(dst.amount)) return periods;
 
