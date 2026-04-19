@@ -3,8 +3,6 @@ import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import {
   autocheckGetPaymentDue,
-  autocheckPollTaskUntilTerminal,
-  autocheckPostCpcScrapeTask,
   readAutocheckEvnClientConfig,
   type AutocheckEvnClientConfig,
 } from "@/lib/autocheck-evn-client";
@@ -250,9 +248,9 @@ type ResolvedPaymentDue =
   | { ok: false; status: number; code?: string; message: string };
 
 /**
- * Gọi payment-due cho `startKy`; nếu hạn trả về đã qua (VN), lần lượt thử k+1..3
- * (chỉ khi kỳ đó có tiền + chưa gán đại lý). AutoCheck không tự suy — ta chủ động hỏi từng kỳ.
- * Cờ `force` trên job chỉ áp dụng shouldSkip/cooldown ở tầng xếp hàng — leo kỳ ở đây không còn bị tắt bởi force (tránh nút bulk luôn dính kỳ 1).
+ * Gọi payment-due từ `startKy` đến 3:
+ * - **404 ở kỳ k** → thử k+1 (hạn mới thường nằm kỳ sau trên AutoCheck; trước đây return sớm nên chỉ thấy ky=1).
+ * - **200** → nếu bật escalate và hạn đã qua (VN), tiếp tục hỏi k+1..3 cho đến khi hạn còn hiệu lực hoặc hết kỳ.
  */
 async function resolvePaymentDueWithPastKyEscalation(
   cfg: AutocheckEvnClientConfig,
@@ -263,39 +261,70 @@ async function resolvePaymentDueWithPastKyEscalation(
   billNam: number,
 ): Promise<ResolvedPaymentDue> {
   const ma = bill.customerCode.trim();
-  const first = await autocheckGetPaymentDue(cfg, {
-    maKhachHang: ma,
-    region,
-    ky: startKy,
-    thang: billThang,
-    nam: billNam,
-  });
-  if (!first.ok) return first;
-  if (!escalatePastKyEnabled()) {
-    return { ok: true, hanThanhToanIso: first.hanThanhToanIso, ky: startKy };
-  }
-  let bestKy: 1 | 2 | 3 = startKy;
-  let bestIso = first.hanThanhToanIso;
-  if (!isPaymentDeadlineBeforeTodayVn(bestIso) || startKy >= 3) {
-    return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
-  }
-  for (let u = startKy + 1; u <= 3; u += 1) {
-    const ky = u as 1 | 2 | 3;
-    const pUp = bill.periods.find((p) => p.ky === ky);
-    if (!pUp || pUp.amount == null || !periodNeedsAssignment(pUp)) break;
-    const rUp = await autocheckGetPaymentDue(cfg, {
+  const call = (ky: 1 | 2 | 3) =>
+    autocheckGetPaymentDue(cfg, {
       maKhachHang: ma,
       region,
       ky,
       thang: billThang,
       nam: billNam,
     });
-    if (!rUp.ok) break;
-    bestKy = ky;
-    bestIso = rUp.hanThanhToanIso;
-    if (!isPaymentDeadlineBeforeTodayVn(bestIso) || ky === 3) break;
+
+  let last404: ResolvedPaymentDue | null = null;
+
+  for (let k = startKy; k <= 3; k++) {
+    const ky = k as 1 | 2 | 3;
+    const pRow = bill.periods.find((p) => p.ky === ky);
+    if (pRow && !periodNeedsAssignment(pRow)) {
+      if (k === startKy) {
+        return { ok: false, status: 0, message: `Kỳ ${ky} đã gán đại lý — không tra payment-due.` };
+      }
+      break;
+    }
+    if (k === startKy) {
+      if (!pRow || pRow.amount == null || !Number.isFinite(pRow.amount)) {
+        return { ok: false, status: 0, message: `Kỳ ${ky} thiếu số tiền trên hóa đơn.` };
+      }
+    } else {
+      if (!pRow) break;
+      if (!periodNeedsAssignment(pRow)) break;
+    }
+
+    const r = await call(ky);
+    if (!r.ok) {
+      if (r.status === 404) {
+        last404 = r;
+      }
+      if (r.status === 404 && ky < 3) {
+        continue;
+      }
+      return r;
+    }
+
+    if (!escalatePastKyEnabled()) {
+      return { ok: true, hanThanhToanIso: r.hanThanhToanIso, ky };
+    }
+    let bestKy: 1 | 2 | 3 = ky;
+    let bestIso = r.hanThanhToanIso;
+    if (!isPaymentDeadlineBeforeTodayVn(bestIso) || ky >= 3) {
+      return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
+    }
+    for (let u = ky + 1; u <= 3; u += 1) {
+      const kyUp = u as 1 | 2 | 3;
+      const pUp = bill.periods.find((p) => p.ky === kyUp);
+      if (!pUp || !periodNeedsAssignment(pUp)) break;
+      if (pUp.amount == null || !Number.isFinite(pUp.amount)) break;
+      const rUp = await call(kyUp);
+      if (!rUp.ok) break;
+      bestKy = kyUp;
+      bestIso = rUp.hanThanhToanIso;
+      if (!isPaymentDeadlineBeforeTodayVn(bestIso) || kyUp === 3) break;
+    }
+    return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
   }
-  return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
+
+  if (last404) return last404;
+  return { ok: false, status: 404, message: "Không có payment-due cho các kỳ đã thử (1–3)." };
 }
 
 function applyPeriodSyncFields(
@@ -324,7 +353,7 @@ function amountForPaymentDeadlineJob(job: PaymentDeadlineSyncJob, period: Electr
   return null;
 }
 
-/** Số tiền dùng cho syncKey khi periodFinal không có amount nhưng trùng kỳ job (targeted + kỳ chưa có tiền). */
+/** Số tiền cho syncKey: ưu tiên amount kỳ đích; không có thì dùng tiền kỳ job (leo kỳ / AutoCheck trả hạn kỳ cao hơn). */
 function amountForFinalKy(
   job: PaymentDeadlineSyncJob,
   periodAtJobKy: ElectricBillPeriod,
@@ -335,10 +364,10 @@ function amountForFinalKy(
   if (periodFinal?.amount != null && Number.isFinite(periodFinal.amount)) {
     return Math.round(periodFinal.amount);
   }
-  if (finalKy === job.ky) {
-    return fallbackAmt;
+  if (job.billingAmountForSync != null && Number.isFinite(job.billingAmountForSync)) {
+    return Math.round(job.billingAmountForSync);
   }
-  return null;
+  return fallbackAmt;
 }
 
 async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
@@ -440,79 +469,7 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       }
     }
 
-    const cpcScrapeEnv =
-      (process.env.PAYMENT_DEADLINE_CPC_SCRAPE_ON_404 ?? "true").trim().toLowerCase() !== "false";
-    /**
-     * POST /api/tasks { ky, thang, nam } trên AutoCheckEvn = quét CPC theo kỳ/tháng cho **nhiều mã** (batch),
-     * không giới hạn bill hiện tại — chỉ dùng cho job đồng bộ hàng loạt. Job targeted (revertOnFailure) bỏ bước này.
-     */
-    const cpcScrape = cpcScrapeEnv && regions.includes("EVN_CPC") && !job.revertOnFailure;
-    if (cpcScrape) {
-      const t = await autocheckPostCpcScrapeTask(cfg, { ky: job.ky, thang: billThang, nam: billNam });
-      if (!t.ok) {
-        next = applyPeriodSyncFields(
-          next,
-          job.ky,
-          failureSyncPatch(job, snapshotForRevert, "error", `Sau 404, không tạo được task quét CPC: ${t.message}`),
-        );
-        await saveBillPeriods(job.billId, next);
-        return;
-      }
-      const poll = await autocheckPollTaskUntilTerminal(cfg, t.taskId);
-      if (!poll.ok || poll.status !== "SUCCESS") {
-        const err =
-          !poll.ok ? poll.message : poll.errorMessage ?? `Task CPC ${poll.status}`;
-        next = applyPeriodSyncFields(
-          next,
-          job.ky,
-          failureSyncPatch(
-            job,
-            snapshotForRevert,
-            "error",
-            `Quét CPC kỳ ${job.ky} T${billThang}/${billNam}: ${err}`,
-          ),
-        );
-        await saveBillPeriods(job.billId, next);
-        return;
-      }
-      const rawAfterCpc = await findElectricBillById(job.billId);
-      const billAfterCpc = rawAfterCpc
-        ? serializeElectricBill(rawAfterCpc as unknown as Record<string, unknown>)
-        : bill;
-      const r2 = await resolvePaymentDueWithPastKyEscalation(
-        cfg,
-        billAfterCpc,
-        "EVN_CPC",
-        job.ky,
-        billThang,
-        billNam,
-      );
-      if (r2.ok) {
-        const finalKy = r2.ky;
-        const periodFinal = billAfterCpc.periods.find((p) => p.ky === finalKy);
-        const amtFinal = amountForFinalKy(job, period, finalKy, periodFinal, amt);
-        if (amtFinal != null) {
-          const syncKeyFinal = computeSyncFingerprint(billNam, billThang, finalKy, amtFinal);
-          if (finalKy !== job.ky) {
-            next = applyPeriodSyncFields(next, job.ky, syncFieldsSnapshot(period) as Record<string, string | null | undefined>);
-          }
-          next = applyPeriodSyncFields(next, finalKy, {
-            paymentDeadline: r2.hanThanhToanIso,
-            evnPaymentDeadlineSyncStatus: "ok",
-            evnPaymentDeadlineSyncError: null,
-            evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-            evnPaymentDeadlineSyncKey: syncKeyFinal,
-          } as Record<string, string | null | undefined>);
-          await saveBillPeriods(job.billId, next);
-          return;
-        }
-        lastMessage = "Sau quét CPC: leo kỳ nhưng thiếu số tiền kỳ đích";
-      } else {
-        lastMessage = `Sau quét CPC: ${r2.message}`;
-      }
-    }
-
-    const noDataMsg = `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}`;
+    const noDataMsg = `Không có payment-due (404) sau khi đã thử kỳ 1→3 theo vùng. Đã thử: ${tried.join(", ")}. ${lastMessage}`;
     next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "no_data", noDataMsg));
     await saveBillPeriods(job.billId, next);
   } catch (e) {
