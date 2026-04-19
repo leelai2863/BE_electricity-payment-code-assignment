@@ -239,8 +239,9 @@ type ResolvedPaymentDue =
   | { ok: false; status: number; code?: string; message: string };
 
 /**
- * Gọi payment-due cho `startKy`; nếu hạn trả về đã qua (VN) và không `force`, lần lượt thử k+1..3
+ * Gọi payment-due cho `startKy`; nếu hạn trả về đã qua (VN), lần lượt thử k+1..3
  * (chỉ khi kỳ đó có tiền + chưa gán đại lý). AutoCheck không tự suy — ta chủ động hỏi từng kỳ.
+ * Cờ `force` trên job chỉ áp dụng shouldSkip/cooldown ở tầng xếp hàng — leo kỳ ở đây không còn bị tắt bởi force (tránh nút bulk luôn dính kỳ 1).
  */
 async function resolvePaymentDueWithPastKyEscalation(
   cfg: AutocheckEvnClientConfig,
@@ -249,7 +250,6 @@ async function resolvePaymentDueWithPastKyEscalation(
   startKy: 1 | 2 | 3,
   billThang: number,
   billNam: number,
-  force: boolean,
 ): Promise<ResolvedPaymentDue> {
   const ma = bill.customerCode.trim();
   const first = await autocheckGetPaymentDue(cfg, {
@@ -260,7 +260,7 @@ async function resolvePaymentDueWithPastKyEscalation(
     nam: billNam,
   });
   if (!first.ok) return first;
-  if (force || !escalatePastKyEnabled()) {
+  if (!escalatePastKyEnabled()) {
     return { ok: true, hanThanhToanIso: first.hanThanhToanIso, ky: startKy };
   }
   let bestKy: 1 | 2 | 3 = startKy;
@@ -398,7 +398,6 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
         job.ky,
         billThang,
         billNam,
-        job.force,
       );
       if (resolved.ok) {
         const finalKy = resolved.ky;
@@ -430,9 +429,14 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       }
     }
 
-    const cpcScrape =
+    const cpcScrapeEnv =
       (process.env.PAYMENT_DEADLINE_CPC_SCRAPE_ON_404 ?? "true").trim().toLowerCase() !== "false";
-    if (cpcScrape && regions.includes("EVN_CPC")) {
+    /**
+     * POST /api/tasks { ky, thang, nam } trên AutoCheckEvn = quét CPC theo kỳ/tháng cho **nhiều mã** (batch),
+     * không giới hạn bill hiện tại — chỉ dùng cho job đồng bộ hàng loạt. Job targeted (revertOnFailure) bỏ bước này.
+     */
+    const cpcScrape = cpcScrapeEnv && regions.includes("EVN_CPC") && !job.revertOnFailure;
+    if (cpcScrape) {
       const t = await autocheckPostCpcScrapeTask(cfg, { ky: job.ky, thang: billThang, nam: billNam });
       if (!t.ok) {
         next = applyPeriodSyncFields(
@@ -471,7 +475,6 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
         job.ky,
         billThang,
         billNam,
-        job.force,
       );
       if (r2.ok) {
         const finalKy = r2.ky;
