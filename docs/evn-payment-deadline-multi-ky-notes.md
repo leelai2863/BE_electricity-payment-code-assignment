@@ -71,7 +71,7 @@ Hai lớp:
 
 ## Chuẩn hóa slot tiền theo kỳ EVN (sau ~04/2026)
 
-Khi `payment-due` chốt `finalKy > jobKy` và ô `finalKy` **chưa có `amount`**, worker gọi `relocateUnassignedBillingFromJobKyToFinalKy`: chuyển `amount`, `scanDate`, `scanDdMm`, `ca`, tên/thẻ/giao dịch từ kỳ job sang kỳ chốt, rồi xóa các field đó trên kỳ job (tránh “tiền kỳ 2 nằm nhầm slot k1” giữa chu kỳ).
+Khi ô `finalKy` **chưa có `amount`**, worker chọn **kỳ nguồn** (`pickSourceKyForRelocateToFinalKy`): ưu tiên `job.ky` nếu có tiền, không thì kỳ chờ giao có tiền nhỏ nhất khác `finalKy` — rồi `relocateUnassignedBillingSourceKyToTargetKy` gom tiền + meta quét sang `finalKy` (tránh tách dòng: tiền k1 / hạn k2 khi `job.ky === finalKy` hoặc tiền vẫn nằm k1).
 
 CRM: cột **Kỳ** (trước là “EVN”) ưu tiên hiển thị kỳ có `evnPaymentDeadlineSyncStatus: ok` + hạn, **ky cao nhất**; chưa đồng bộ thì fallback theo các kỳ có tiền chờ giao.
 
