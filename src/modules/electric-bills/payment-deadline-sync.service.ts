@@ -44,9 +44,9 @@ const lastEnqueueAtByJobKey = new Map<string, number>();
 
 function minEnqueueGapMs(force: boolean): number {
   if (force) {
-    return Math.max(0, Number(process.env.PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS ?? 45_000) || 45_000);
+    return Math.max(0, Number(process.env.PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS ?? 12_000) || 12_000);
   }
-  return Math.max(0, Number(process.env.PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS ?? 120_000) || 120_000);
+  return Math.max(0, Number(process.env.PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS ?? 30_000) || 30_000);
 }
 
 /** POST không truyền billIds (quét toàn bộ chờ giao) — hạn chế tần suất. */
@@ -127,11 +127,22 @@ function shouldSkipByState(
   const st = p.evnPaymentDeadlineSyncStatus ?? null;
   const key = p.evnPaymentDeadlineSyncKey ?? null;
   const syncedAtStr = p.evnPaymentDeadlineSyncedAt ?? null;
-  if (st === "ok" && key === syncKey && p.paymentDeadline) {
-    if (escalatePastKyEnabled() && isPaymentDeadlineBeforeTodayVn(p.paymentDeadline)) {
-      return false;
-    }
+
+  const pd = p.paymentDeadline;
+  const deadlineExpired =
+    pd != null &&
+    pd !== "" &&
+    escalatePastKyEnabled() &&
+    isPaymentDeadlineBeforeTodayVn(pd);
+
+  /** Đồng bộ ok + đã có hạn còn hiệu lực (theo ngày VN) → không gọi AutoCheck lại (tránh lệch fingerprint amount). */
+  if (st === "ok" && pd && !deadlineExpired) {
     return true;
+  }
+
+  /** ok + fingerprint khớp + hạn đã qua → không skip (cần leo kỳ / làm mới). */
+  if (st === "ok" && key === syncKey && pd && deadlineExpired) {
+    return false;
   }
   if ((st === "pending" || st === "running") && syncedAtStr) {
     const t = Date.parse(syncedAtStr);
@@ -501,11 +512,7 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       }
     }
 
-    const cpcHint =
-      !cpcScrapeEnv && regions.includes("EVN_CPC")
-        ? " Quét CPC batch (POST /api/tasks) đang tắt — chỉ bật khi thật sự cần (PAYMENT_DEADLINE_CPC_SCRAPE_ON_404=true)."
-        : "";
-    const noDataMsg = `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}${cpcHint}`;
+    const noDataMsg = `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}`;
     next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "no_data", noDataMsg));
     await saveBillPeriods(job.billId, next);
   } catch (e) {
