@@ -248,9 +248,10 @@ type ResolvedPaymentDue =
   | { ok: false; status: number; code?: string; message: string };
 
 /**
- * Gọi payment-due từ `startKy` đến 3:
- * - **404 ở kỳ k** → thử k+1 (hạn mới thường nằm kỳ sau trên AutoCheck; trước đây return sớm nên chỉ thấy ky=1).
- * - **200** → nếu bật escalate và hạn đã qua (VN), tiếp tục hỏi k+1..3 cho đến khi hạn còn hiệu lực hoặc hết kỳ.
+ * Gọi `payment-due` lần lượt cho **mọi kỳ** `startKy…3` (khi `PAYMENT_DEADLINE_ESCALATE_PAST_KY` bật),
+ * rồi chọn kết quả có **hạn thanh toán mới nhất** (timestamp ISO). Như vậy log AutoCheck luôn thấy ky=2/3 khi có dữ liệu,
+ * không phụ thuộc “so ngày VN có nhận ra quá hạn hay không”.
+ * Khi escalate tắt: chỉ gọi đúng `startKy` (một GET).
  */
 async function resolvePaymentDueWithPastKyEscalation(
   cfg: AutocheckEvnClientConfig,
@@ -270,59 +271,51 @@ async function resolvePaymentDueWithPastKyEscalation(
       nam: billNam,
     });
 
-  let last404: ResolvedPaymentDue | null = null;
+  const kyEnd: number = escalatePastKyEnabled() ? 3 : startKy;
+  const successes: Array<{ ky: 1 | 2 | 3; hanThanhToanIso: string }> = [];
+  let lastNonOk: ResolvedPaymentDue | null = null;
 
-  for (let k = startKy; k <= 3; k++) {
+  for (let k = startKy; k <= kyEnd; k++) {
     const ky = k as 1 | 2 | 3;
     const pRow = bill.periods.find((p) => p.ky === ky);
     if (pRow && !periodNeedsAssignment(pRow)) {
       if (k === startKy) {
         return { ok: false, status: 0, message: `Kỳ ${ky} đã gán đại lý — không tra payment-due.` };
       }
-      break;
+      continue;
     }
     if (k === startKy) {
       if (!pRow || pRow.amount == null || !Number.isFinite(pRow.amount)) {
         return { ok: false, status: 0, message: `Kỳ ${ky} thiếu số tiền trên hóa đơn.` };
       }
-    } else {
-      if (pRow && !periodNeedsAssignment(pRow)) break;
     }
 
     const r = await call(ky);
     if (!r.ok) {
-      if (r.status === 404) {
-        last404 = r;
+      if (!lastNonOk || (lastNonOk.status === 404 && r.status !== 404)) {
+        lastNonOk = r;
       }
-      if (r.status === 404 && ky < 3) {
-        continue;
-      }
-      return r;
+      continue;
     }
-
-    if (!escalatePastKyEnabled()) {
-      return { ok: true, hanThanhToanIso: r.hanThanhToanIso, ky };
-    }
-    let bestKy: 1 | 2 | 3 = ky;
-    let bestIso = r.hanThanhToanIso;
-    if (!isPaymentDeadlineBeforeTodayVn(bestIso) || ky >= 3) {
-      return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
-    }
-    for (let u = ky + 1; u <= 3; u += 1) {
-      const kyUp = u as 1 | 2 | 3;
-      const pUp = bill.periods.find((p) => p.ky === kyUp);
-      if (pUp && !periodNeedsAssignment(pUp)) break;
-      const rUp = await call(kyUp);
-      if (!rUp.ok) break;
-      bestKy = kyUp;
-      bestIso = rUp.hanThanhToanIso;
-      if (!isPaymentDeadlineBeforeTodayVn(bestIso) || kyUp === 3) break;
-    }
-    return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
+    successes.push({ ky, hanThanhToanIso: r.hanThanhToanIso });
   }
 
-  if (last404) return last404;
-  return { ok: false, status: 404, message: "Không có payment-due cho các kỳ đã thử (1–3)." };
+  if (successes.length === 0) {
+    return lastNonOk ?? { ok: false, status: 404, message: "Không có payment-due cho các kỳ đã thử." };
+  }
+
+  const ts = (iso: string) => {
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : 0;
+  };
+  const best = successes.reduce((a, b) => {
+    const da = ts(a.hanThanhToanIso);
+    const db = ts(b.hanThanhToanIso);
+    if (db !== da) return db > da ? b : a;
+    return b.ky > a.ky ? b : a;
+  });
+
+  return { ok: true, hanThanhToanIso: best.hanThanhToanIso, ky: best.ky };
 }
 
 function applyPeriodSyncFields(
