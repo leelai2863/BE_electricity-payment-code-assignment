@@ -9,6 +9,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts
 
 EXPOSE 3001
 

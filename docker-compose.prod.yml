@@ -17,6 +17,10 @@
 #
 # Seed lần đầu (bắt buộc khi volume Mongo mới): sau khi stack up — `npm run docker:seed` hoặc `sh scripts/first-run-seed.sh`.
 # Import Excel: job one-off (xem README mục Production).
+#
+# Migrate gom tiền đúng kỳ EVN (trong container, không cần npm trên host):
+#   docker exec giaodich-backend sh -lc "cd /app && npx tsx scripts/normalize-evn-period-slots.ts"
+#   docker exec giaodich-backend sh -lc "cd /app && MIGRATE_APPLY=true npx tsx scripts/normalize-evn-period-slots.ts"
 
 services:
   backend:
