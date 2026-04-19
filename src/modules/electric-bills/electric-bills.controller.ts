@@ -1,7 +1,10 @@
 import type { Request, Response } from "express";
 import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import type { PatchBody } from "@/modules/electric-bills/electric-bills.helpers";
-import { enqueueUnassignedPaymentDeadlineSync } from "@/modules/electric-bills/payment-deadline-sync.service";
+import {
+  enqueueUnassignedPaymentDeadlineSync,
+  parseTargetedPaymentDeadline,
+} from "@/modules/electric-bills/payment-deadline-sync.service";
 import {
   ServiceError,
   listUnassignedBills,
@@ -47,6 +50,24 @@ export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const billIds = Array.isArray(body.billIds) ? (body.billIds as unknown[]).filter((x) => typeof x === "string") : undefined;
+    const rawTargeted = body.targeted;
+    if (rawTargeted != null && typeof rawTargeted === "object") {
+      const targeted = parseTargetedPaymentDeadline(rawTargeted);
+      if (!targeted) {
+        throw new ServiceError(
+          400,
+          "targeted không hợp lệ: cần billId, ky (1–3), billingThang (1–12), billingNam (2000–2100).",
+        );
+      }
+      const result = await enqueueUnassignedPaymentDeadlineSync({
+        billIds: billIds as string[] | undefined,
+        force: Boolean(body.force),
+        requestedBy: body.requestedBy === "user" ? "user" : "system",
+        targeted,
+      });
+      res.json({ ...result, source: "payment_deadline_sync_queue" });
+      return;
+    }
     const result = await enqueueUnassignedPaymentDeadlineSync({
       billIds: billIds as string[] | undefined,
       force: Boolean(body.force),
