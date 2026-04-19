@@ -501,7 +501,11 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
       }
     }
 
-    const noDataMsg = `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}`;
+    const cpcHint =
+      !cpcScrapeEnv && regions.includes("EVN_CPC")
+        ? " Quét CPC batch (POST /api/tasks) đang tắt — chỉ bật khi thật sự cần (PAYMENT_DEADLINE_CPC_SCRAPE_ON_404=true)."
+        : "";
+    const noDataMsg = `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}${cpcHint}`;
     next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "no_data", noDataMsg));
     await saveBillPeriods(job.billId, next);
   } catch (e) {
@@ -675,7 +679,7 @@ export async function enqueueUnassignedPaymentDeadlineSync(
       const waitSec = Math.ceil((cool - (now - lastEmptyBillIdsBulkAt)) / 1000);
       throw new ServiceError(
         429,
-        `Đồng bộ toàn bộ danh sách chờ giao chỉ nên gọi mỗi ${Math.ceil(cool / 60_000)} phút (giảm tải AutoCheck). Thử lại sau ${waitSec}s hoặc truyền billIds cụ thể.`,
+        `Đồng bộ toàn bộ danh sách chờ giao chỉ nên gọi mỗi ${Math.ceil(cool / 60_000)} phút (giảm tải). Thử lại sau ${waitSec}s hoặc truyền billIds cụ thể.`,
       );
     }
     lastEmptyBillIdsBulkAt = now;
