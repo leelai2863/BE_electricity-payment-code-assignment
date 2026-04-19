@@ -6,8 +6,9 @@ import {
   autocheckPollTaskUntilTerminal,
   autocheckPostCpcScrapeTask,
   readAutocheckEvnClientConfig,
+  type AutocheckEvnClientConfig,
 } from "@/lib/autocheck-evn-client";
-import { buildPaymentDueRegionCandidates } from "@/lib/evn-region-candidates";
+import { buildPaymentDueRegionCandidates, type AutocheckRegionScope } from "@/lib/evn-region-candidates";
 import { serializeElectricBill } from "@/lib/electric-bill-serialize";
 import { periodsDtoToMongoSchema } from "@/lib/electric-bill-mongo-periods";
 import type { ElectricBillPeriod } from "@/types/electric-bill";
@@ -21,6 +22,11 @@ export type PaymentDeadlineSyncJob = {
   ky: 1 | 2 | 3;
   force: boolean;
   requestedBy: "system" | "user";
+  /** Gửi AutoCheck theo tháng/năm chỉ định (force theo kỳ/tháng từ UI); bỏ qua evn_ky_bill / month refu. */
+  billingThang?: number | null;
+  billingNam?: number | null;
+  /** Khi true: mọi lỗi/404 không ghi đè trạng thái cũ — khôi phục snapshot trước khi chạy. */
+  revertOnFailure?: boolean;
 };
 
 const queue: PaymentDeadlineSyncJob[] = [];
@@ -78,6 +84,27 @@ function billingThangNamForAutocheck(bill: { month: number; year: number; evnKyB
   return { thang: bill.month, nam: bill.year };
 }
 
+function effectiveBillingThangNam(
+  job: PaymentDeadlineSyncJob,
+  bill: { month: number; year: number; evnKyBillThang?: number | null; evnKyBillNam?: number | null },
+): { thang: number; nam: number } {
+  const ot = job.billingThang;
+  const on = job.billingNam;
+  const overrideOk =
+    ot != null &&
+    on != null &&
+    Number.isInteger(ot) &&
+    Number.isInteger(on) &&
+    ot >= 1 &&
+    ot <= 12 &&
+    on >= 2000 &&
+    on <= 2100;
+  if (overrideOk) {
+    return { thang: ot, nam: on };
+  }
+  return billingThangNamForAutocheck(bill);
+}
+
 function periodNeedsAssignment(p: ElectricBillPeriod): boolean {
   if (p.amount == null) return false;
   const ag = (p.assignedAgencyId ?? "").trim();
@@ -94,6 +121,9 @@ function shouldSkipByState(
   const key = p.evnPaymentDeadlineSyncKey ?? null;
   const syncedAtStr = p.evnPaymentDeadlineSyncedAt ?? null;
   if (st === "ok" && key === syncKey && p.paymentDeadline) {
+    if (escalatePastKyEnabled() && isPaymentDeadlineBeforeTodayVn(p.paymentDeadline)) {
+      return false;
+    }
     return true;
   }
   if ((st === "pending" || st === "running") && syncedAtStr) {
@@ -103,6 +133,151 @@ function shouldSkipByState(
     }
   }
   return false;
+}
+
+/** Đủ điều kiện xếp hàng đồng bộ hạn TT (dùng khi so sánh kỳ cao/thấp). */
+function canEnqueuePaymentDeadlineSyncForPeriod(
+  bill: {
+    month: number;
+    year: number;
+    evnKyBillThang?: number | null;
+    evnKyBillNam?: number | null;
+    periods: ElectricBillPeriod[];
+  },
+  p: ElectricBillPeriod,
+  force: boolean,
+): boolean {
+  if (p.amount == null || !periodNeedsAssignment(p)) return false;
+  if (p.paymentDeadline && !force) {
+    const allowExpired =
+      escalatePastKyEnabled() && isPaymentDeadlineBeforeTodayVn(p.paymentDeadline);
+    if (!allowExpired) return false;
+  }
+  const { thang: bt, nam: bn } = billingThangNamForAutocheck(bill);
+  const syncKey = computeSyncFingerprint(bn, bt, p.ky, p.amount);
+  return !shouldSkipByState(p, syncKey, force);
+}
+
+const VN_TZ = "Asia/Ho_Chi_Minh";
+
+function calendarYmdInTimeZone(isoOrDate: string | Date, timeZone: string): { y: number; m: number; d: number } | null {
+  const d = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
+  if (Number.isNaN(d.getTime())) return null;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = fmt.formatToParts(d);
+  const y = Number(parts.find((part) => part.type === "year")?.value);
+  const m = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(day)) return null;
+  return { y, m, d: day };
+}
+
+function ymdToNum(y: number, m: number, d: number): number {
+  return y * 10_000 + m * 100 + d;
+}
+
+/** Hạn (theo ngày lịch VN) trước hôm nay → coi đã qua, có thể gọi AutoCheck thêm kỳ k+1 (tối đa 3). */
+function isPaymentDeadlineBeforeTodayVn(deadlineIso: string, now = new Date()): boolean {
+  const dl = calendarYmdInTimeZone(deadlineIso, VN_TZ);
+  const td = calendarYmdInTimeZone(now, VN_TZ);
+  if (!dl || !td) return false;
+  return ymdToNum(dl.y, dl.m, dl.d) < ymdToNum(td.y, td.m, td.d);
+}
+
+function escalatePastKyEnabled(): boolean {
+  return (process.env.PAYMENT_DEADLINE_ESCALATE_PAST_KY ?? "true").trim().toLowerCase() !== "false";
+}
+
+function syncFieldsSnapshot(p: ElectricBillPeriod): Record<string, string | null | undefined> {
+  return {
+    paymentDeadline: p.paymentDeadline ?? null,
+    evnPaymentDeadlineSyncStatus: p.evnPaymentDeadlineSyncStatus ?? null,
+    evnPaymentDeadlineSyncError: p.evnPaymentDeadlineSyncError ?? null,
+    evnPaymentDeadlineSyncedAt: p.evnPaymentDeadlineSyncedAt ?? null,
+    evnPaymentDeadlineSyncKey: p.evnPaymentDeadlineSyncKey ?? null,
+  };
+}
+
+function failureSyncPatch(
+  job: PaymentDeadlineSyncJob,
+  snapshot: Record<string, string | null | undefined> | null,
+  kind: "error" | "no_data",
+  message: string,
+): Record<string, string | null | undefined> {
+  const iso = new Date().toISOString();
+  if (job.revertOnFailure && snapshot) {
+    return { ...snapshot };
+  }
+  if (kind === "error") {
+    return {
+      evnPaymentDeadlineSyncStatus: "error",
+      evnPaymentDeadlineSyncError: message.slice(0, 2000),
+      evnPaymentDeadlineSyncedAt: iso,
+    };
+  }
+  return {
+    evnPaymentDeadlineSyncStatus: "no_data",
+    evnPaymentDeadlineSyncError: message.slice(0, 2000),
+    evnPaymentDeadlineSyncedAt: iso,
+  };
+}
+
+type ResolvedPaymentDue =
+  | { ok: true; hanThanhToanIso: string; ky: 1 | 2 | 3 }
+  | { ok: false; status: number; code?: string; message: string };
+
+/**
+ * Gọi payment-due cho `startKy`; nếu hạn trả về đã qua (VN) và không `force`, lần lượt thử k+1..3
+ * (chỉ khi kỳ đó có tiền + chưa gán đại lý). AutoCheck không tự suy — ta chủ động hỏi từng kỳ.
+ */
+async function resolvePaymentDueWithPastKyEscalation(
+  cfg: AutocheckEvnClientConfig,
+  bill: { customerCode: string; periods: ElectricBillPeriod[] },
+  region: AutocheckRegionScope,
+  startKy: 1 | 2 | 3,
+  billThang: number,
+  billNam: number,
+  force: boolean,
+): Promise<ResolvedPaymentDue> {
+  const ma = bill.customerCode.trim();
+  const first = await autocheckGetPaymentDue(cfg, {
+    maKhachHang: ma,
+    region,
+    ky: startKy,
+    thang: billThang,
+    nam: billNam,
+  });
+  if (!first.ok) return first;
+  if (force || !escalatePastKyEnabled()) {
+    return { ok: true, hanThanhToanIso: first.hanThanhToanIso, ky: startKy };
+  }
+  let bestKy: 1 | 2 | 3 = startKy;
+  let bestIso = first.hanThanhToanIso;
+  if (!isPaymentDeadlineBeforeTodayVn(bestIso) || startKy >= 3) {
+    return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
+  }
+  for (let u = startKy + 1; u <= 3; u += 1) {
+    const ky = u as 1 | 2 | 3;
+    const pUp = bill.periods.find((p) => p.ky === ky);
+    if (!pUp || pUp.amount == null || !periodNeedsAssignment(pUp)) break;
+    const rUp = await autocheckGetPaymentDue(cfg, {
+      maKhachHang: ma,
+      region,
+      ky,
+      thang: billThang,
+      nam: billNam,
+    });
+    if (!rUp.ok) break;
+    bestKy = ky;
+    bestIso = rUp.hanThanhToanIso;
+    if (!isPaymentDeadlineBeforeTodayVn(bestIso) || ky === 3) break;
+  }
+  return { ok: true, hanThanhToanIso: bestIso, ky: bestKy };
 }
 
 function applyPeriodSyncFields(
@@ -132,129 +307,178 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
     return;
   }
 
-  const { thang: billThang, nam: billNam } = billingThangNamForAutocheck(bill);
+  const { thang: billThang, nam: billNam } = effectiveBillingThangNam(job, bill);
   const syncKey = computeSyncFingerprint(billNam, billThang, job.ky, period.amount);
   if (shouldSkipByState(period, syncKey, job.force)) {
     return;
   }
 
-  const nowIso = new Date().toISOString();
-  let next = applyPeriodSyncFields(bill.periods, job.ky, {
-    evnPaymentDeadlineSyncStatus: "running",
-    evnPaymentDeadlineSyncError: null,
-    evnPaymentDeadlineSyncedAt: nowIso,
-  } as Record<string, string | null | undefined>);
-  await saveBillPeriods(job.billId, next);
+  const snapshotForRevert = job.revertOnFailure ? syncFieldsSnapshot(period) : null;
 
-  if (!cfg.baseUrl) {
-    next = applyPeriodSyncFields(next, job.ky, {
-      evnPaymentDeadlineSyncStatus: "error",
-      evnPaymentDeadlineSyncError: "Chưa cấu hình AUTOCHECK_EVN_URL trên elec-service.",
-      evnPaymentDeadlineSyncedAt: new Date().toISOString(),
+  try {
+    const nowIso = new Date().toISOString();
+    let next = applyPeriodSyncFields(bill.periods, job.ky, {
+      evnPaymentDeadlineSyncStatus: "running",
+      evnPaymentDeadlineSyncError: null,
+      evnPaymentDeadlineSyncedAt: nowIso,
     } as Record<string, string | null | undefined>);
     await saveBillPeriods(job.billId, next);
-    return;
-  }
 
-  if (!bill.customerCode?.trim()) {
-    next = applyPeriodSyncFields(next, job.ky, {
-      evnPaymentDeadlineSyncStatus: "error",
-      evnPaymentDeadlineSyncError: "Thiếu mã khách hàng.",
-      evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-    } as Record<string, string | null | undefined>);
+    if (!cfg.baseUrl) {
+      next = applyPeriodSyncFields(
+        next,
+        job.ky,
+        failureSyncPatch(job, snapshotForRevert, "error", "Chưa cấu hình AUTOCHECK_EVN_URL trên elec-service."),
+      );
+      await saveBillPeriods(job.billId, next);
+      return;
+    }
+
+    if (!bill.customerCode?.trim()) {
+      next = applyPeriodSyncFields(
+        next,
+        job.ky,
+        failureSyncPatch(job, snapshotForRevert, "error", "Thiếu mã khách hàng."),
+      );
+      await saveBillPeriods(job.billId, next);
+      return;
+    }
+
+    const regions = buildPaymentDueRegionCandidates(bill.customerCode, bill.evn);
+    const tried: string[] = [];
+    let lastMessage = "";
+
+    for (const region of regions) {
+      tried.push(region);
+      const resolved = await resolvePaymentDueWithPastKyEscalation(
+        cfg,
+        bill,
+        region as AutocheckRegionScope,
+        job.ky,
+        billThang,
+        billNam,
+        job.force,
+      );
+      if (resolved.ok) {
+        const finalKy = resolved.ky;
+        const periodFinal = bill.periods.find((p) => p.ky === finalKy);
+        const amtFinal = periodFinal?.amount;
+        if (amtFinal == null) {
+          lastMessage = `${region}: thiếu số tiền kỳ ${finalKy}`;
+          continue;
+        }
+        const syncKeyFinal = computeSyncFingerprint(billNam, billThang, finalKy, amtFinal);
+        if (finalKy !== job.ky) {
+          next = applyPeriodSyncFields(next, job.ky, syncFieldsSnapshot(period) as Record<string, string | null | undefined>);
+        }
+        next = applyPeriodSyncFields(next, finalKy, {
+          paymentDeadline: resolved.hanThanhToanIso,
+          evnPaymentDeadlineSyncStatus: "ok",
+          evnPaymentDeadlineSyncError: null,
+          evnPaymentDeadlineSyncedAt: new Date().toISOString(),
+          evnPaymentDeadlineSyncKey: syncKeyFinal,
+        } as Record<string, string | null | undefined>);
+        await saveBillPeriods(job.billId, next);
+        return;
+      }
+      lastMessage = `${region}: ${resolved.message}${resolved.code ? ` (${resolved.code})` : ""}`;
+      if (resolved.status !== 404) {
+        next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "error", lastMessage));
+        await saveBillPeriods(job.billId, next);
+        return;
+      }
+    }
+
+    const cpcScrape =
+      (process.env.PAYMENT_DEADLINE_CPC_SCRAPE_ON_404 ?? "true").trim().toLowerCase() !== "false";
+    if (cpcScrape && regions.includes("EVN_CPC")) {
+      const t = await autocheckPostCpcScrapeTask(cfg, { ky: job.ky, thang: billThang, nam: billNam });
+      if (!t.ok) {
+        next = applyPeriodSyncFields(
+          next,
+          job.ky,
+          failureSyncPatch(job, snapshotForRevert, "error", `Sau 404, không tạo được task quét CPC: ${t.message}`),
+        );
+        await saveBillPeriods(job.billId, next);
+        return;
+      }
+      const poll = await autocheckPollTaskUntilTerminal(cfg, t.taskId);
+      if (!poll.ok || poll.status !== "SUCCESS") {
+        const err =
+          !poll.ok ? poll.message : poll.errorMessage ?? `Task CPC ${poll.status}`;
+        next = applyPeriodSyncFields(
+          next,
+          job.ky,
+          failureSyncPatch(
+            job,
+            snapshotForRevert,
+            "error",
+            `Quét CPC kỳ ${job.ky} T${billThang}/${billNam}: ${err}`,
+          ),
+        );
+        await saveBillPeriods(job.billId, next);
+        return;
+      }
+      const rawAfterCpc = await findElectricBillById(job.billId);
+      const billAfterCpc = rawAfterCpc
+        ? serializeElectricBill(rawAfterCpc as unknown as Record<string, unknown>)
+        : bill;
+      const r2 = await resolvePaymentDueWithPastKyEscalation(
+        cfg,
+        billAfterCpc,
+        "EVN_CPC",
+        job.ky,
+        billThang,
+        billNam,
+        job.force,
+      );
+      if (r2.ok) {
+        const finalKy = r2.ky;
+        const periodFinal = billAfterCpc.periods.find((p) => p.ky === finalKy);
+        const amtFinal = periodFinal?.amount;
+        if (amtFinal != null) {
+          const syncKeyFinal = computeSyncFingerprint(billNam, billThang, finalKy, amtFinal);
+          if (finalKy !== job.ky) {
+            next = applyPeriodSyncFields(next, job.ky, syncFieldsSnapshot(period) as Record<string, string | null | undefined>);
+          }
+          next = applyPeriodSyncFields(next, finalKy, {
+            paymentDeadline: r2.hanThanhToanIso,
+            evnPaymentDeadlineSyncStatus: "ok",
+            evnPaymentDeadlineSyncError: null,
+            evnPaymentDeadlineSyncedAt: new Date().toISOString(),
+            evnPaymentDeadlineSyncKey: syncKeyFinal,
+          } as Record<string, string | null | undefined>);
+          await saveBillPeriods(job.billId, next);
+          return;
+        }
+        lastMessage = "Sau quét CPC: leo kỳ nhưng thiếu số tiền kỳ đích";
+      } else {
+        lastMessage = `Sau quét CPC: ${r2.message}`;
+      }
+    }
+
+    const noDataMsg = `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}`;
+    next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "no_data", noDataMsg));
     await saveBillPeriods(job.billId, next);
-    return;
-  }
-
-  const regions = buildPaymentDueRegionCandidates(bill.customerCode, bill.evn);
-  const tried: string[] = [];
-  let lastMessage = "";
-
-  for (const region of regions) {
-    tried.push(region);
-    const r = await autocheckGetPaymentDue(cfg, {
-      maKhachHang: bill.customerCode,
-      region,
-      ky: job.ky,
-      thang: billThang,
-      nam: billNam,
-    });
-    if (r.ok) {
-      next = applyPeriodSyncFields(next, job.ky, {
-        paymentDeadline: r.hanThanhToanIso,
-        evnPaymentDeadlineSyncStatus: "ok",
-        evnPaymentDeadlineSyncError: null,
-        evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-        evnPaymentDeadlineSyncKey: syncKey,
-      } as Record<string, string | null | undefined>);
-      await saveBillPeriods(job.billId, next);
-      return;
+  } catch (e) {
+    if (!snapshotForRevert) {
+      throw e;
     }
-    lastMessage = `${region}: ${r.message}${r.code ? ` (${r.code})` : ""}`;
-    if (r.status !== 404) {
-      next = applyPeriodSyncFields(next, job.ky, {
-        evnPaymentDeadlineSyncStatus: "error",
-        evnPaymentDeadlineSyncError: lastMessage.slice(0, 2000),
-        evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-      } as Record<string, string | null | undefined>);
-      await saveBillPeriods(job.billId, next);
-      return;
+    try {
+      const raw2 = await findElectricBillById(job.billId);
+      if (raw2) {
+        const bill2 = serializeElectricBill(raw2 as unknown as Record<string, unknown>);
+        const restored = applyPeriodSyncFields(
+          bill2.periods,
+          job.ky,
+          snapshotForRevert as Record<string, string | null | undefined>,
+        );
+        await saveBillPeriods(job.billId, restored);
+      }
+    } catch {
+      /* ignore */
     }
   }
-
-  const cpcScrape =
-    (process.env.PAYMENT_DEADLINE_CPC_SCRAPE_ON_404 ?? "true").trim().toLowerCase() !== "false";
-  if (cpcScrape && regions.includes("EVN_CPC")) {
-    const t = await autocheckPostCpcScrapeTask(cfg, { ky: job.ky, thang: billThang, nam: billNam });
-    if (!t.ok) {
-      next = applyPeriodSyncFields(next, job.ky, {
-        evnPaymentDeadlineSyncStatus: "error",
-        evnPaymentDeadlineSyncError: `Sau 404, không tạo được task quét CPC: ${t.message}`.slice(0, 2000),
-        evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-      } as Record<string, string | null | undefined>);
-      await saveBillPeriods(job.billId, next);
-      return;
-    }
-    const poll = await autocheckPollTaskUntilTerminal(cfg, t.taskId);
-    if (!poll.ok || poll.status !== "SUCCESS") {
-      const err =
-        !poll.ok ? poll.message : poll.errorMessage ?? `Task CPC ${poll.status}`;
-      next = applyPeriodSyncFields(next, job.ky, {
-        evnPaymentDeadlineSyncStatus: "error",
-        evnPaymentDeadlineSyncError: `Quét CPC kỳ ${job.ky} T${billThang}/${billNam}: ${err}`.slice(0, 2000),
-        evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-      } as Record<string, string | null | undefined>);
-      await saveBillPeriods(job.billId, next);
-      return;
-    }
-    const r2 = await autocheckGetPaymentDue(cfg, {
-      maKhachHang: bill.customerCode,
-      region: "EVN_CPC",
-      ky: job.ky,
-      thang: billThang,
-      nam: billNam,
-    });
-    if (r2.ok) {
-      next = applyPeriodSyncFields(next, job.ky, {
-        paymentDeadline: r2.hanThanhToanIso,
-        evnPaymentDeadlineSyncStatus: "ok",
-        evnPaymentDeadlineSyncError: null,
-        evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-        evnPaymentDeadlineSyncKey: syncKey,
-      } as Record<string, string | null | undefined>);
-      await saveBillPeriods(job.billId, next);
-      return;
-    }
-    lastMessage = `Sau quét CPC: ${r2.message}`;
-  }
-
-  next = applyPeriodSyncFields(next, job.ky, {
-    evnPaymentDeadlineSyncStatus: "no_data",
-    evnPaymentDeadlineSyncError:
-      `Không có bản thông báo đã parse (404). Đã thử: ${tried.join(", ")}. ${lastMessage}`.slice(0, 2000),
-    evnPaymentDeadlineSyncedAt: new Date().toISOString(),
-  } as Record<string, string | null | undefined>);
-  await saveBillPeriods(job.billId, next);
 }
 
 let workerStarted = false;
@@ -308,7 +532,40 @@ export type EnqueueUnassignedPaymentDeadlineBody = {
   billIds?: string[];
   force?: boolean;
   requestedBy?: "system" | "user";
+  /** Force một bill + kỳ + tháng/năm AutoCheck; thất bại không ghi đè trạng thái EVN cũ (revert). */
+  targeted?: {
+    billId: string;
+    ky: 1 | 2 | 3;
+    billingThang: number;
+    billingNam: number;
+  };
 };
+
+function parseTargetedPaymentDeadline(raw: unknown): {
+  billId: string;
+  ky: 1 | 2 | 3;
+  billingThang: number;
+  billingNam: number;
+} | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const billId = typeof o.billId === "string" ? o.billId.trim() : "";
+  const kyNum = Number(o.ky);
+  if (!billId || (kyNum !== 1 && kyNum !== 2 && kyNum !== 3)) return null;
+  const billingThang = Number(o.billingThang);
+  const billingNam = Number(o.billingNam);
+  if (
+    !Number.isInteger(billingThang) ||
+    billingThang < 1 ||
+    billingThang > 12 ||
+    !Number.isInteger(billingNam) ||
+    billingNam < 2000 ||
+    billingNam > 2100
+  ) {
+    return null;
+  }
+  return { billId, ky: kyNum as 1 | 2 | 3, billingThang, billingNam };
+}
 
 /**
  * Xếp hàng đồng bộ hạn TT (theo kỳ) cho các bill chờ giao.
@@ -317,6 +574,37 @@ export type EnqueueUnassignedPaymentDeadlineBody = {
 export async function enqueueUnassignedPaymentDeadlineSync(
   body: EnqueueUnassignedPaymentDeadlineBody,
 ): Promise<{ enqueued: number; duplicate: number; skipped: number; cooldown: number }> {
+  const targeted = parseTargetedPaymentDeadline(body.targeted);
+  if (targeted) {
+    const requestedBy = body.requestedBy === "user" ? "user" : "system";
+    const raw = await findElectricBillById(targeted.billId);
+    if (!raw) {
+      throw new ServiceError(404, "Không tìm thấy hóa đơn.");
+    }
+    const bill = serializeElectricBill(raw as unknown as Record<string, unknown>);
+    const p = bill.periods.find((x) => x.ky === targeted.ky);
+    if (!p || p.amount == null || !periodNeedsAssignment(p)) {
+      throw new ServiceError(400, "Kỳ chọn không có tiền hoặc đã được giao đại lý.");
+    }
+    let enqueued = 0;
+    let duplicate = 0;
+    const skipped = 0;
+    let cooldown = 0;
+    const r = enqueuePaymentDeadlineSync({
+      billId: targeted.billId,
+      ky: targeted.ky,
+      force: true,
+      requestedBy,
+      billingThang: targeted.billingThang,
+      billingNam: targeted.billingNam,
+      revertOnFailure: true,
+    });
+    if (r === "queued") enqueued += 1;
+    else if (r === "duplicate") duplicate += 1;
+    else cooldown += 1;
+    return { enqueued, duplicate, skipped, cooldown };
+  }
+
   const force = Boolean(body.force);
   const requestedBy = body.requestedBy === "user" ? "user" : "system";
   const ids = Array.isArray(body.billIds) ? body.billIds.filter((x) => typeof x === "string" && x.trim()) : [];
@@ -349,8 +637,12 @@ export async function enqueueUnassignedPaymentDeadlineSync(
     for (const p of bill.periods) {
       if (p.amount == null || !periodNeedsAssignment(p)) continue;
       if (p.paymentDeadline && !force) {
-        skipped += 1;
-        continue;
+        const allowExpiredResync =
+          escalatePastKyEnabled() && isPaymentDeadlineBeforeTodayVn(p.paymentDeadline);
+        if (!allowExpiredResync) {
+          skipped += 1;
+          continue;
+        }
       }
       const ky = p.ky;
       const { thang: bt, nam: bn } = billingThangNamForAutocheck(bill);
@@ -358,6 +650,21 @@ export async function enqueueUnassignedPaymentDeadlineSync(
       if (shouldSkipByState(p, syncKey, force)) {
         skipped += 1;
         continue;
+      }
+      if (
+        !force &&
+        escalatePastKyEnabled() &&
+        p.paymentDeadline &&
+        isPaymentDeadlineBeforeTodayVn(p.paymentDeadline) &&
+        p.ky < 3
+      ) {
+        const preferHigher = bill.periods.some(
+          (c) => c.ky > p.ky && canEnqueuePaymentDeadlineSyncForPeriod(bill, c, force),
+        );
+        if (preferHigher) {
+          skipped += 1;
+          continue;
+        }
       }
       const r = enqueuePaymentDeadlineSync({ billId, ky, force, requestedBy });
       if (r === "queued") enqueued += 1;

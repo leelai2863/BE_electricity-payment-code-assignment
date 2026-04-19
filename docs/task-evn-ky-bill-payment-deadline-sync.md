@@ -59,6 +59,7 @@ Chỉ tên biến — giá trị đặt trên server, **không** commit file `.e
 | `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS` | Khoảng cách tối thiểu giữa hai lần xếp hàng cùng bill+kỳ khi **không** `force` (mặc định 120000). |
 | `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS` | Tương tự khi `force: true` (mặc định 45000). |
 | `PAYMENT_DEADLINE_SYNC_EMPTY_BILL_IDS_COOLDOWN_MS` | POST **không** có `billIds` — khoảng cách tối thiểu (mặc định 120000). |
+| `PAYMENT_DEADLINE_ESCALATE_PAST_KY` | `false` để tắt toàn bộ: (1) xếp hàng vẫn **bỏ qua** kỳ đã có hạn; (2) worker **không** leo k+1 khi hạn trả về đã qua. Khi bật (mặc định): kỳ đã đồng bộ `ok` nhưng hạn **&lt; hôm nay (VN)** vẫn có thể được xếp hàng lại; sau `payment-due` nếu hạn vẫn quá hạn thì gọi tiếp k+1..3 (kỳ có tiền + chưa gán đại lý). |
 | `CHECKBILL_INGEST_SECRET` | Xác thực ingest snapshot (Bearer / `x-api-key`). |
 | `CHECKBILL_INGEST_MAX_ITEMS` / `RECEIVED_INGEST_MAX_ITEMS` | Trần số dòng items. |
 | `GATEWAY_CALLBACK_URL` / `CHECKBILL_GATEWAY_CALLBACK_URL` | Callback sau ingest (tuỳ chọn). |
