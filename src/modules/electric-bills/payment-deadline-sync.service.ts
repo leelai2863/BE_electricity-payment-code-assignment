@@ -442,7 +442,15 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
         }
         const syncKeyFinal = computeSyncFingerprint(billNam, billThang, finalKy, amtFinal);
         if (finalKy !== job.ky) {
-          next = applyPeriodSyncFields(next, job.ky, syncFieldsSnapshot(period) as Record<string, string | null | undefined>);
+          // Không khôi phục paymentDeadline cũ của kỳ job — nếu không, bảng Giao mã (ưu tiên hạn muộn nhất)
+          // vẫn chọn nhầm kỳ job dù EVN đã chốt hạn ở finalKy.
+          next = applyPeriodSyncFields(next, job.ky, {
+            paymentDeadline: null,
+            evnPaymentDeadlineSyncStatus: null,
+            evnPaymentDeadlineSyncError: null,
+            evnPaymentDeadlineSyncedAt: null,
+            evnPaymentDeadlineSyncKey: null,
+          } as Record<string, string | null | undefined>);
         }
         next = applyPeriodSyncFields(next, finalKy, {
           paymentDeadline: resolved.hanThanhToanIso,
