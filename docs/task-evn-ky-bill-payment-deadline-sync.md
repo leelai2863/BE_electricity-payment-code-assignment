@@ -11,7 +11,7 @@ Tài liệu mô tả phạm vi đã triển khai, biến môi trường, API và
 
 | Thành phần | Vai trò |
 |------------|---------|
-| **Assign-refu-manager-service** | Mongo `ElectricBillRecord`, ingest checkbill, staging, worker đồng bộ hạn TT, gọi AutoCheck (`GET payment-due`; `POST /api/tasks` CPC batch **chỉ** khi bật env và 404). |
+| **Assign-refu-manager-service** | Mongo `ElectricBillRecord`, ingest checkbill, staging, worker đồng bộ hạn TT — chỉ gọi AutoCheck **`GET payment-due`** (thử kỳ 1→3 khi 404 / leo kỳ khi hạn quá). **Không** gọi `POST /api/tasks` quét CPC batch từ service này (tránh quét cả danh sách). |
 | **AutoCheckEvn** | DB thông báo đã parse; lọc theo `maKH`, `region`, `ky`, `thang`, `nam`. Trả envelope có `kyBill`, `hanThanhToan`. |
 | **tool-check-bill** | Batch → Excel “Có cước” (cột kỳ EVN tùy chọn), JSON snapshot → gateway/ingest. |
 | **core-x-gateway** | Proxy `ELEC_SERVICE_URL` tới elec-service; RBAC `evn:view` cho prefix billing-scan / electric-bills. |
@@ -53,8 +53,7 @@ Chỉ tên biến — giá trị đặt trên server, **không** commit file `.e
 | `AUTOCHECK_EVN_URL` | Base URL AutoCheckEvn (bỏ dư `/` cuối). |
 | `AUTOCHECK_EVN_API_KEY` | Header `x-api-key` nếu AutoCheck yêu cầu. |
 | `AUTOCHECK_EVN_HTTP_TIMEOUT_MS` | Timeout HTTP (mặc định 28000). |
-| `AUTOCHECK_EVN_TASK_POLL_MS` / `AUTOCHECK_EVN_TASK_POLL_MAX_MS` | Poll task CPC sau `POST /api/tasks`. |
-| `PAYMENT_DEADLINE_CPC_SCRAPE_ON_404` | Chỉ khi giá trị **`true`**: sau 404 toàn vùng, gọi `POST /api/tasks` quét CPC theo kỳ/tháng (AutoCheck xử lý **hàng loạt mã**, không phải một bill). **Mặc định tắt** — tránh một job làm quét cả danh sách. |
+| `AUTOCHECK_EVN_TASK_POLL_MS` / `AUTOCHECK_EVN_TASK_POLL_MAX_MS` | Dự phòng cho client khác poll task AutoCheck (assign-refu **không** tạo task CPC). |
 | `PAYMENT_DEADLINE_SYNC_TICK_MS` | Chu kỳ worker queue (mặc định 700). |
 | `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_MS` | Khoảng cách tối thiểu giữa hai lần xếp hàng cùng bill+kỳ khi **không** `force` (mặc định 30000). |
 | `PAYMENT_DEADLINE_MIN_ENQUEUE_INTERVAL_FORCE_MS` | Tương tự khi `force: true` (mặc định 12000). |
