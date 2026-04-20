@@ -1,7 +1,17 @@
 import type { Request, Response } from "express";
 import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
-import { createThuChi, getThuChiById, listThuChi, removeThuChi, updateThuChi } from "./accounting-thu-chi.service";
+import {
+  createBankCatalogEntry,
+  createThuChi,
+  getThuChiById,
+  listBankCatalogEntries,
+  listThuChi,
+  removeBankCatalogEntry,
+  removeThuChi,
+  updateBankCatalogEntry,
+  updateThuChi,
+} from "./accounting-thu-chi.service";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
   if (error instanceof ServiceError) {
@@ -72,5 +82,43 @@ export async function removeThuChiHandler(req: Request, res: Response) {
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không xóa được");
+  }
+}
+
+export async function listBankCatalogHandler(req: Request, res: Response) {
+  try {
+    const result = await listBankCatalogEntries(req.query as Record<string, unknown>);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không đọc được danh mục ngân hàng");
+  }
+}
+
+export async function createBankCatalogEntryHandler(req: Request, res: Response) {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await createBankCatalogEntry(body);
+    res.status(201).json(result);
+  } catch (error) {
+    handleError(res, error, "Không lưu được danh mục ngân hàng");
+  }
+}
+
+export async function updateBankCatalogEntryHandler(req: Request, res: Response) {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await updateBankCatalogEntry(String(req.params.id), body);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không cập nhật được danh mục ngân hàng");
+  }
+}
+
+export async function removeBankCatalogEntryHandler(req: Request, res: Response) {
+  try {
+    const result = await removeBankCatalogEntry(String(req.params.id));
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không xóa được ngân hàng");
   }
 }

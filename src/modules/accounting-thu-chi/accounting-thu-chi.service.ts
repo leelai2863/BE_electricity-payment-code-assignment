@@ -10,6 +10,12 @@ import {
   listAccountingThuChiEntries,
   updateAccountingThuChiDoc,
 } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
+import {
+  deleteBankCatalogById,
+  listBankCatalog,
+  updateBankCatalogById,
+  upsertBankCatalog,
+} from "@/modules/accounting-thu-chi/user-bank-preference.repository";
 
 /** Tạo mới: bỏ trống → null; giá trị không phải số hợp lệ → 400 */
 function parseMoneyCreate(raw: unknown, fieldLabel: string): number | null {
@@ -48,6 +54,18 @@ function resolveThuChiActorId(raw?: string | null): mongoose.Types.ObjectId {
   const s = typeof raw === "string" ? raw.trim() : "";
   if (s && mongoose.isValidObjectId(s)) return new mongoose.Types.ObjectId(s);
   return new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
+}
+
+/** Ghi nhận ngân hàng vào danh mục hệ thống — lỗi không làm fail luồng thu chi. */
+async function recordBankCatalogSafe(bankTrimmed: string): Promise<void> {
+  const trimmed = bankTrimmed.trim().slice(0, 120);
+  if (!trimmed) return;
+  try {
+    await ensureDb();
+    await upsertBankCatalog(trimmed);
+  } catch {
+    /* ignore */
+  }
 }
 
 async function resolveAgencyLinkForSource(sourceRaw: string): Promise<{
@@ -197,6 +215,7 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
       ip: ctx?.ip ?? null,
       userAgent: ctx?.userAgent ?? null,
     });
+    await recordBankCatalogSafe(bank.trim());
     return { data: serializeDoc(row), source: "mongodb" as const };
   } catch (error) {
     throw new ServiceError(500, getErrorMessage(error, "Không lưu được"));
@@ -278,6 +297,8 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
       ip: ctx?.ip ?? null,
       userAgent: ctx?.userAgent ?? null,
     });
+    const finalBank = String((updated as { bank?: string }).bank ?? "").trim();
+    await recordBankCatalogSafe(finalBank);
     return { data: serializeDoc(updated as Record<string, unknown>), source: "mongodb" as const };
   } catch (error) {
     if (error instanceof ServiceError) throw error;
@@ -308,4 +329,78 @@ export async function removeThuChi(id: string, ctx?: ThuChiAuditContext) {
     userAgent: ctx?.userAgent ?? null,
   });
   return { ok: true, source: "mongodb" as const };
+}
+
+export async function listBankCatalogEntries(query: Record<string, unknown>) {
+  await ensureDb();
+  let limit = 20;
+  if (query.limit != null && query.limit !== "") {
+    const n = Number(query.limit);
+    if (Number.isFinite(n)) {
+      limit = Math.min(50, Math.max(1, Math.trunc(n)));
+    }
+  }
+  const qRaw = typeof query.q === "string" ? query.q.trim() : "";
+  if (qRaw.length > 120) throw new ServiceError(400, "Tham số q quá dài");
+
+  try {
+    const items = await listBankCatalog({
+      q: qRaw || undefined,
+      limit,
+    });
+    return {
+      data: {
+        items: items.map((row) => ({
+          _id: String(row._id),
+          bank: row.bankDisplay,
+          usageCount: row.usageCount,
+          lastUsedAt: row.lastUsedAt.toISOString(),
+        })),
+      },
+      source: "mongodb" as const,
+    };
+  } catch (error) {
+    if (error instanceof ServiceError) throw error;
+    throw new ServiceError(503, getErrorMessage(error, "Không đọc được danh mục ngân hàng"));
+  }
+}
+
+export async function createBankCatalogEntry(body: Record<string, unknown>) {
+  await ensureDb();
+  const bank = typeof body.bank === "string" ? body.bank.trim() : "";
+  if (!bank) throw new ServiceError(400, "bank không được để trống");
+  if (bank.length > 120) throw new ServiceError(400, "bank quá dài");
+  try {
+    await upsertBankCatalog(bank);
+    return { ok: true as const, source: "mongodb" as const };
+  } catch (error) {
+    throw new ServiceError(500, getErrorMessage(error, "Không lưu được danh mục ngân hàng"));
+  }
+}
+
+export async function updateBankCatalogEntry(id: string, body: Record<string, unknown>) {
+  await ensureDb();
+  const bank = typeof body.bank === "string" ? body.bank.trim() : "";
+  if (!bank) throw new ServiceError(400, "bank không được để trống");
+  if (bank.length > 120) throw new ServiceError(400, "bank quá dài");
+  try {
+    const ok = await updateBankCatalogById(id, bank);
+    if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng cần cập nhật");
+    return { ok: true as const, source: "mongodb" as const };
+  } catch (error) {
+    if (error instanceof ServiceError) throw error;
+    throw new ServiceError(500, getErrorMessage(error, "Không cập nhật được danh mục ngân hàng"));
+  }
+}
+
+export async function removeBankCatalogEntry(id: string) {
+  await ensureDb();
+  try {
+    const ok = await deleteBankCatalogById(id);
+    if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng cần xóa");
+    return { ok: true as const, source: "mongodb" as const };
+  } catch (error) {
+    if (error instanceof ServiceError) throw error;
+    throw new ServiceError(500, getErrorMessage(error, "Không xóa được ngân hàng"));
+  }
 }
