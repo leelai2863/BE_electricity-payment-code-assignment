@@ -15,4 +15,8 @@ export type AuditAction =
   | "electric.invoice_patch"
   | "electric.manual_create"
   | "agency.create"
-  | "auth.login";
+  | "auth.login"
+  | "accounting.thu_chi_create"
+  | "accounting.thu_chi_update"
+  | "accounting.thu_chi_delete"
+  | "electric.refund_line_patch";

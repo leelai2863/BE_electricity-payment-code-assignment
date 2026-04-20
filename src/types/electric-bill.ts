@@ -97,6 +97,13 @@ export type RefundLineStateDto = {
   phiPct: number | null;
   daHoan: number;
   updatedAt: string;
+  /**
+   * Phân bổ từ bảng thu chi: khi Nguồn khớp mã đại lý (Agency.code), tổng cột Chi của đại lý
+   * được chia theo tỷ lệ (Số tiền − Thành phí) từng dòng hoàn tiền. Chỉ gắn trong GET mail-queue.
+   */
+  daHoanFromThuChi?: number;
+  /** daHoan (Mongo / nhập tay) + (daHoanFromThuChi ?? 0) */
+  daHoanTotal?: number;
 };
 
 /** Một dòng đã hoàn tất (theo kỳ) cho trang Đi mail / Hoàn tiền */

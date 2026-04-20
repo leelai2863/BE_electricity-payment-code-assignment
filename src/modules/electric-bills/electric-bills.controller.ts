@@ -153,7 +153,12 @@ export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
 
 export async function patchRefundLineStatesHandler(req: Request, res: Response) {
   try {
-    const result = await patchRefundLineStates(req.body);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const result = await patchRefundLineStates(body as Parameters<typeof patchRefundLineStates>[0], {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Cập nhật không thành công");
