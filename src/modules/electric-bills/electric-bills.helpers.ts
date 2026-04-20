@@ -57,7 +57,7 @@ export type InvoiceListParams = {
   includeFacets: boolean;
 };
 
-export type PeriodPatch = (Partial<Omit<ElectricBillPeriod, "ky">> & { ky: 1 | 2 | 3 })[];
+export type PeriodPatch = (Partial<Omit<ElectricBillPeriod, "ky">> & { ky: 1 | 2 | 3; newKy?: 1 | 2 | 3 })[];
 
 export type PatchBody = {
   customerName?: string | null;
@@ -272,7 +272,19 @@ export function applyPeriodPatches(
     const idx = next.findIndex((p) => p.ky === patch.ky);
     if (idx < 0) continue;
 
-    const cur = { ...next[idx] };
+    let targetIdx = idx;
+    if (patch.newKy !== undefined && patch.newKy !== patch.ky) {
+      const swapIdx = next.findIndex((p) => p.ky === patch.newKy);
+      if (swapIdx >= 0) {
+        const a = { ...next[idx] };
+        const b = { ...next[swapIdx] };
+        next[idx] = { ...b, ky: patch.ky };
+        next[swapIdx] = { ...a, ky: patch.newKy };
+        targetIdx = swapIdx;
+      }
+    }
+
+    const cur = { ...next[targetIdx] };
     if (patch.amount !== undefined) cur.amount = patch.amount;
     if (patch.paymentDeadline !== undefined) cur.paymentDeadline = patch.paymentDeadline;
     if (patch.scanDate !== undefined) cur.scanDate = patch.scanDate;
@@ -290,7 +302,7 @@ export function applyPeriodPatches(
     if (patch.cardType !== undefined) cur.cardType = patch.cardType;
     if (patch.dealCompletedAt !== undefined) cur.dealCompletedAt = patch.dealCompletedAt;
 
-    next[idx] = cur;
+    next[targetIdx] = cur;
   }
 
   return next;

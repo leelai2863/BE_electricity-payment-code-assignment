@@ -18,6 +18,7 @@ import type {
 } from "@/types/electric-bill";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import { Agency } from "@/models/Agency";
+import { User } from "@/models/User";
 import { normalizeScanDdMmInput } from "@/lib/scan-ddmm";
 import {
   findUnassignedCandidateBills,
@@ -1088,6 +1089,66 @@ function parseOptionalIsoString(raw: unknown): string | null {
   return d.toISOString();
 }
 
+const PERIOD_AUDIT_FIELDS: Array<keyof ElectricBillPeriod> = [
+  "ky",
+  "paymentDeadline",
+  "scanDdMm",
+  "ca",
+  "assignedAgencyId",
+  "assignedAgencyName",
+  "dlGiaoName",
+  "paymentConfirmed",
+  "cccdConfirmed",
+  "customerName",
+  "cardType",
+  "dealCompletedAt",
+];
+
+function periodAuditSnapshot(p?: ElectricBillPeriod | null): Record<string, unknown> {
+  if (!p) return {};
+  return {
+    ky: p.ky,
+    paymentDeadline: p.paymentDeadline ?? null,
+    scanDdMm: p.scanDdMm ?? null,
+    ca: p.ca ?? null,
+    assignedAgencyId: p.assignedAgencyId ?? null,
+    assignedAgencyName: p.assignedAgencyName ?? null,
+    dlGiaoName: p.dlGiaoName ?? null,
+    paymentConfirmed: Boolean(p.paymentConfirmed),
+    cccdConfirmed: Boolean(p.cccdConfirmed),
+    customerName: p.customerName ?? null,
+    cardType: p.cardType ?? null,
+    dealCompletedAt: p.dealCompletedAt ?? null,
+  };
+}
+
+function buildPeriodAuditDiff(
+  before: ElectricBillPeriod[],
+  after: ElectricBillPeriod[],
+  patches?: Array<{ ky: 1 | 2 | 3; newKy?: 1 | 2 | 3 }>,
+): Array<{ ky: number; changedFields: string[]; before: Record<string, unknown>; after: Record<string, unknown> }> {
+  const impacted = new Set<number>();
+  for (const p of patches ?? []) {
+    impacted.add(p.ky);
+    if (p.newKy) impacted.add(p.newKy);
+  }
+  if (impacted.size === 0) {
+    for (const p of before) impacted.add(p.ky);
+    for (const p of after) impacted.add(p.ky);
+  }
+
+  const result: Array<{ ky: number; changedFields: string[]; before: Record<string, unknown>; after: Record<string, unknown> }> = [];
+  for (const ky of [...impacted].sort((a, b) => a - b)) {
+    const b = before.find((p) => p.ky === ky);
+    const a = after.find((p) => p.ky === ky);
+    const bs = periodAuditSnapshot(b);
+    const as = periodAuditSnapshot(a);
+    const changedFields = PERIOD_AUDIT_FIELDS.filter((field) => JSON.stringify(bs[field]) !== JSON.stringify(as[field])).map(String);
+    if (changedFields.length > 0) result.push({ ky, changedFields, before: bs, after: as });
+  }
+  return result;
+}
+
 function periodAgencyNamesMatch(p: ElectricBillPeriod): boolean {
   const agency = (p.assignedAgencyName ?? "").trim().toLowerCase();
   const dl = (p.dlGiaoName ?? "").trim().toLowerCase();
@@ -1388,7 +1449,9 @@ export async function patchElectricBill(id: string, body: PatchBody) {
       );
     }
 
-    let nextPeriods = serializeElectricBill(doc.toObject()).periods;
+    const oldDto = serializeElectricBill(doc.toObject());
+    const beforePeriods = oldDto.periods.map((p) => ({ ...p }));
+    let nextPeriods = beforePeriods.map((p) => ({ ...p }));
 
     if (body.assignedAgencyId !== undefined && !body.periods?.length) {
       nextPeriods = nextPeriods.map((p) =>
@@ -1419,6 +1482,7 @@ export async function patchElectricBill(id: string, body: PatchBody) {
         const isEditingCompletedRow =
           currentCompleted &&
           (patch.scanDdMm !== undefined ||
+            patch.newKy !== undefined ||
             patch.ca !== undefined ||
             patch.assignedAgencyId !== undefined ||
             patch.assignedAgencyName !== undefined ||
@@ -1491,20 +1555,29 @@ export async function patchElectricBill(id: string, body: PatchBody) {
       }
 
       for (const patch of body.periods) {
-        if (!patch.assignedAgencyId?.trim()) continue;
+        // Với đổi kỳ (newKy), luôn phải đồng bộ AssignedCode theo trạng thái thực tế sau patch,
+        // kể cả khi client không gửi lại assignedAgencyId.
+        const effectiveKy = patch.newKy ?? patch.ky;
+        const updated = nextPeriods.find((p) => p.ky === effectiveKy);
+        if (!updated?.amount) continue;
 
-        const updated = nextPeriods.find((p) => p.ky === patch.ky);
-        if (!updated?.amount || !updated.assignedAgencyName) continue;
+        const agencyId = (updated.assignedAgencyId ?? "").trim();
+        const agencyName = (updated.assignedAgencyName ?? "").trim();
+        if (!agencyId || !agencyName) {
+          // Không còn neo đại lý cho amount này -> bỏ AssignedCode để tránh lệch dữ liệu.
+          await deleteAssignedCodeDoc(billCustomerCode, updated.amount, billYear, billMonth);
+          continue;
+        }
 
         await upsertAssignedCodeDoc({
           customerCode: billCustomerCode,
           amount: updated.amount,
           year: billYear,
           month: billMonth,
-          agencyId: patch.assignedAgencyId,
-          agencyName: updated.assignedAgencyName,
+          agencyId,
+          agencyName,
           billId: id,
-          ky: patch.ky,
+          ky: effectiveKy,
         });
       }
     }
@@ -1573,6 +1646,9 @@ export async function patchElectricBill(id: string, body: PatchBody) {
       await markVoucherCodeCompleted(doc.customerCode);
     }
 
+    const actorProfile = await User.findById(actorId).select("name email").lean();
+    const actionAt = new Date().toISOString();
+    const periodChanges = buildPeriodAuditDiff(beforePeriods, nextPeriods, body.periods);
     await writeAuditLog({
       actorUserId: actorId,
       action: "electric.invoice_patch",
@@ -1580,7 +1656,13 @@ export async function patchElectricBill(id: string, body: PatchBody) {
       entityId: doc._id,
       metadata: {
         customerCode: doc.customerCode,
+        actionAt,
+        actorDisplayName:
+          typeof actorProfile?.name === "string" && actorProfile.name.trim() ? actorProfile.name.trim() : null,
+        actorEmail:
+          typeof actorProfile?.email === "string" && actorProfile.email.trim() ? actorProfile.email.trim() : null,
         patchedFields: Object.keys(body).filter((k) => k !== "actorUserId" && k !== "actorRoles"),
+        periodChanges,
       },
     });
 
