@@ -13,3 +13,11 @@ mongo-seed/dump/*
 deploy/be-electric-backend.docker.tar
 deploy/be-electric-backend.docker.tar.gz
 deploy/compose-and-scripts.zip
+
+# Security guard for this secondary repository:
+# never track docs and CI/CD workflows here.
+.github/workflows/
+docs/
+README.md
+BUSINESS_OVERVIEW.md
+packages/shared-logger/README.md
