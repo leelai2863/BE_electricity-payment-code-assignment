@@ -13,9 +13,11 @@ import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
 import type {
   ElectricBillPeriod,
   MailQueueLineDto,
+  RefundFeeRuleDto,
   RefundLineStateDto,
 } from "@/types/electric-bill";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
+import { Agency } from "@/models/Agency";
 import { normalizeScanDdMmInput } from "@/lib/scan-ddmm";
 import {
   findUnassignedCandidateBills,
@@ -65,6 +67,12 @@ import {
   serializeRefundFeeRuleDoc,
   serializeRefundLineStateDoc,
 } from "@/modules/electric-bills/electric-bills.mappers";
+import { findLinkedChiEntries } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
+import {
+  mergeThuChiAllocationsIntoRefundStates,
+  buildRefundFinancialWarnings,
+} from "@/lib/mail-queue-thu-chi-merge";
+import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
 
 async function checkAssignedCodeConflict(
   customerCode: string,
@@ -279,100 +287,137 @@ export async function getInvoiceCompleted(query: Record<string, unknown>) {
   }
 }
 
+/** Snapshot mail-queue + phân bổ thu chi — dùng cho GET và cho PATCH (kiểm tra xác nhận nhập tay). */
+async function buildMailQueueSnapshotInternal(): Promise<{
+  data: MailQueueLineDto[];
+  refundLineStates: RefundLineStateDto[];
+  refundFeeRules: RefundFeeRuleDto[];
+  refundWarnings: string[];
+  source: "mongodb";
+}> {
+  const [docs, lineStateDocs, feeRuleDocs, chiEntryDocs] = await Promise.all([
+    findMailQueueBills(),
+    findRefundLineStates(),
+    findRefundFeeRules(),
+    findLinkedChiEntries(),
+  ]);
+
+  const lines: MailQueueLineDto[] = [];
+  const resolvedLineStates: RefundLineStateDto[] = [];
+  const lineStateMap = new Map<string, RefundLineStateDto>();
+  for (const x of lineStateDocs) {
+    const dto = serializeRefundLineStateDoc(x);
+    lineStateMap.set(`${dto.billId}_k${dto.ky}`, dto);
+  }
+  const feeRules = feeRuleDocs.map((x) => serializeRefundFeeRuleDoc(x));
+
+  for (const d of docs) {
+    const bill = serializeElectricBill(d as Record<string, unknown>);
+    for (const p of bill.periods) {
+      if (!p.dealCompletedAt || p.amount == null) continue;
+
+      lines.push({
+        billId: bill._id,
+        customerCode: bill.customerCode,
+        monthLabel: bill.monthLabel,
+        month: bill.month,
+        year: bill.year,
+        company: bill.company,
+        ky: p.ky,
+        amount: p.amount,
+        assignedAgencyName: p.assignedAgencyName,
+        ca: p.ca,
+        dlGiaoName: p.dlGiaoName,
+        customerName: p.customerName,
+        scanDdMm: p.scanDdMm,
+        cardType: p.cardType,
+        resolvedStatus: null,
+        resolvedPhiPct: null,
+        dealCompletedAt: p.dealCompletedAt,
+      });
+    }
+  }
+
+  for (const line of lines) {
+    const agencyName = (line.assignedAgencyName ?? "").trim() || "(Chưa có đại lý)";
+    const agencyRules = feeRules.filter((r) => r.agencyName.trim().toUpperCase() === agencyName.trim().toUpperCase());
+    const hasManualRule = agencyRules.some((r) => r.isActive && r.conditionType === "manual");
+    const resolved = await resolveRefundRuleFromLine(agencyName, {
+      year: line.year,
+      month: line.month,
+      scanDdMm: line.scanDdMm,
+      dealCompletedAt: line.dealCompletedAt,
+      amount: line.amount,
+      cardType: line.cardType,
+    });
+    line.resolvedStatus = resolved?.statusLabel ?? null;
+    line.resolvedPhiPct = resolved?.pct ?? null;
+    const stateKey = `${line.billId}_k${line.ky}`;
+    const existing = lineStateMap.get(stateKey);
+    const anchor = refundAnchorDateUtc({
+      year: line.year,
+      month: line.month,
+      scanDdMm: line.scanDdMm,
+      dealCompletedAt: line.dealCompletedAt,
+    });
+    if (hasManualRule) {
+      const manualStatus = (existing?.status ?? "").trim();
+      const manualPct =
+        manualStatus ? resolveRefundFeePctFromRulesByStatus(feeRules, agencyName, manualStatus, anchor) : null;
+      line.resolvedStatus = manualStatus || null;
+      line.resolvedPhiPct = manualPct;
+    }
+    resolvedLineStates.push({
+      billId: line.billId,
+      ky: line.ky,
+      agencyName,
+      status: line.resolvedStatus ?? "",
+      phiPct: line.resolvedPhiPct,
+      daHoan: existing?.daHoan ?? 0,
+      updatedAt: existing?.updatedAt ?? new Date().toISOString(),
+    });
+  }
+
+  const paired = lines.map((line, i) => ({ line, state: resolvedLineStates[i]! }));
+  paired.sort((a, b) => new Date(b.line.dealCompletedAt).getTime() - new Date(a.line.dealCompletedAt).getTime());
+  lines.length = 0;
+  resolvedLineStates.length = 0;
+  for (const { line, state } of paired) {
+    lines.push(line);
+    resolvedLineStates.push(state);
+  }
+
+  const linkedIds = chiEntryDocs
+    .map((e) => (e.linkedAgencyId ? String(e.linkedAgencyId) : ""))
+    .filter((id) => Boolean(id) && mongoose.isValidObjectId(id));
+  const uniqueAgencyIds = [...new Set(linkedIds)].map((id) => new mongoose.Types.ObjectId(id));
+  const agencyDocs =
+    uniqueAgencyIds.length > 0
+      ? await Agency.find({ _id: { $in: uniqueAgencyIds } })
+          .select({ name: 1 })
+          .lean()
+      : [];
+  const agencyCurrentNameById = new Map<string, string>(
+    agencyDocs.map((a) => [String(a._id), typeof a.name === "string" ? a.name.trim() : ""])
+  );
+
+  mergeThuChiAllocationsIntoRefundStates(lines, resolvedLineStates, chiEntryDocs, agencyCurrentNameById);
+  const refundWarnings = buildRefundFinancialWarnings(resolvedLineStates);
+
+  return {
+    data: lines,
+    refundLineStates: resolvedLineStates,
+    refundFeeRules: feeRules,
+    refundWarnings,
+    source: "mongodb",
+  };
+}
+
 export async function getMailQueue() {
   await ensureDb();
 
   try {
-    const [docs, lineStateDocs, feeRuleDocs] = await Promise.all([
-      findMailQueueBills(),
-      findRefundLineStates(),
-      findRefundFeeRules(),
-    ]);
-
-    const lines: MailQueueLineDto[] = [];
-    const resolvedLineStates: RefundLineStateDto[] = [];
-    const lineStateMap = new Map<string, RefundLineStateDto>();
-    for (const x of lineStateDocs) {
-      const dto = serializeRefundLineStateDoc(x);
-      lineStateMap.set(`${dto.billId}_k${dto.ky}`, dto);
-    }
-    const feeRules = feeRuleDocs.map((x) => serializeRefundFeeRuleDoc(x));
-
-    for (const d of docs) {
-      const bill = serializeElectricBill(d as Record<string, unknown>);
-      for (const p of bill.periods) {
-        if (!p.dealCompletedAt || p.amount == null) continue;
-
-        lines.push({
-          billId: bill._id,
-          customerCode: bill.customerCode,
-          monthLabel: bill.monthLabel,
-          month: bill.month,
-          year: bill.year,
-          company: bill.company,
-          ky: p.ky,
-          amount: p.amount,
-          assignedAgencyName: p.assignedAgencyName,
-          ca: p.ca,
-          dlGiaoName: p.dlGiaoName,
-          customerName: p.customerName,
-          scanDdMm: p.scanDdMm,
-          cardType: p.cardType,
-          resolvedStatus: null,
-          resolvedPhiPct: null,
-          dealCompletedAt: p.dealCompletedAt,
-        });
-      }
-    }
-
-    for (const line of lines) {
-      const agencyName = (line.assignedAgencyName ?? "").trim() || "(Chưa có đại lý)";
-      const agencyRules = feeRules.filter((r) => r.agencyName.trim().toUpperCase() === agencyName.trim().toUpperCase());
-      const hasManualRule = agencyRules.some((r) => r.isActive && r.conditionType === "manual");
-      const resolved = await resolveRefundRuleFromLine(agencyName, {
-        year: line.year,
-        month: line.month,
-        scanDdMm: line.scanDdMm,
-        dealCompletedAt: line.dealCompletedAt,
-        amount: line.amount,
-        cardType: line.cardType,
-      });
-      line.resolvedStatus = resolved?.statusLabel ?? null;
-      line.resolvedPhiPct = resolved?.pct ?? null;
-      const stateKey = `${line.billId}_k${line.ky}`;
-      const existing = lineStateMap.get(stateKey);
-      const anchor = refundAnchorDateUtc({
-        year: line.year,
-        month: line.month,
-        scanDdMm: line.scanDdMm,
-        dealCompletedAt: line.dealCompletedAt,
-      });
-      if (hasManualRule) {
-        const manualStatus = (existing?.status ?? "").trim();
-        const manualPct =
-          manualStatus ? resolveRefundFeePctFromRulesByStatus(feeRules, agencyName, manualStatus, anchor) : null;
-        line.resolvedStatus = manualStatus || null;
-        line.resolvedPhiPct = manualPct;
-      }
-      resolvedLineStates.push({
-        billId: line.billId,
-        ky: line.ky,
-        agencyName,
-        status: line.resolvedStatus ?? "",
-        phiPct: line.resolvedPhiPct,
-        daHoan: existing?.daHoan ?? 0,
-        updatedAt: existing?.updatedAt ?? new Date().toISOString(),
-      });
-    }
-
-    lines.sort((a, b) => new Date(b.dealCompletedAt).getTime() - new Date(a.dealCompletedAt).getTime());
-
-    return {
-      data: lines,
-      refundLineStates: resolvedLineStates,
-      refundFeeRules: feeRules,
-      source: "mongodb",
-    };
+    return await buildMailQueueSnapshotInternal();
   } catch (error) {
     throw new ServiceError(503, getErrorMessage(error, "Không đọc được MongoDB"), { data: [] });
   }
@@ -560,8 +605,18 @@ export async function removeRefundFeeRule(id: string) {
   return { data: { deletedId: id }, source: "mongodb" };
 }
 
-export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyItem[] }) {
+function resolveRefundPatchActorId(raw?: string | null): mongoose.Types.ObjectId {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (s && mongoose.isValidObjectId(s)) return new mongoose.Types.ObjectId(s);
+  return new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
+}
+
+export async function patchRefundLineStates(
+  body: { items?: RefundLinePatchBodyItem[]; confirmManualDaHoanOverride?: boolean },
+  ctx?: { actorUserId?: string; ip?: string | null; userAgent?: string | null }
+) {
   const items = Array.isArray(body.items) ? body.items : [];
+  const confirmManualDaHoanOverride = Boolean(body.confirmManualDaHoanOverride);
 
   if (items.length === 0) {
     throw new ServiceError(400, "Cần mảng items");
@@ -574,8 +629,96 @@ export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyI
   await ensureDb();
 
   try {
-    const out: RefundLineStateDto[] = [];
+    const actorId = resolveRefundPatchActorId(ctx?.actorUserId);
+
+    const needsThuChiGuard = items.some((it) => it.daHoan !== undefined);
+    const snap = needsThuChiGuard ? await buildMailQueueSnapshotInternal() : null;
+    const thuChiByLine = new Map<string, number>();
+    if (snap) {
+      for (const s of snap.refundLineStates) {
+        thuChiByLine.set(`${s.billId}_k${s.ky}`, s.daHoanFromThuChi ?? 0);
+      }
+    }
+
+    const billIds = [...new Set(items.map((it) => it.billId).filter((id) => mongoose.isValidObjectId(id)))];
+    const billRows =
+      billIds.length > 0
+        ? await ElectricBillRecord.find({ _id: { $in: billIds.map((id) => new mongoose.Types.ObjectId(id)) } })
+            .select({ customerCode: 1 })
+            .lean()
+        : [];
+    const customerByBillId = new Map<string, string>(
+      billRows.map((b) => [String(b._id), String((b as { customerCode?: string }).customerCode ?? "")])
+    );
+
     const feeRules = (await findRefundFeeRules({ isActive: true })).map((x) => serializeRefundFeeRuleDoc(x));
+
+    const conflictByLineKey = new Map<
+      string,
+      {
+        billId: string;
+        ky: number;
+        customerCode: string;
+        daHoanFromThuChi: number;
+        prevDaHoan: number;
+        nextDaHoan: number;
+      }
+    >();
+
+    for (const it of items) {
+      if (!mongoose.isValidObjectId(it.billId)) {
+        throw new ServiceError(400, `billId không hợp lệ: ${it.billId}`);
+      }
+
+      const ky = Number(it.ky);
+      if (ky !== 1 && ky !== 2 && ky !== 3) {
+        throw new ServiceError(400, "ky phải là 1, 2 hoặc 3");
+      }
+
+      const agencyName = typeof it.agencyName === "string" ? it.agencyName.trim() : "";
+      if (!agencyName) {
+        throw new ServiceError(400, "Thiếu agencyName");
+      }
+
+      const year = Number(it.year);
+      const month = Number(it.month);
+      if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+        throw new ServiceError(400, "year/month không hợp lệ");
+      }
+
+      if (it.daHoan !== undefined && snap) {
+        const existing = await findRefundLineStateOne(it.billId, ky);
+        const curDaHoan = typeof existing?.daHoan === "number" ? existing.daHoan : 0;
+        const newDaHoan = Number(it.daHoan) || 0;
+        const lineKey = `${it.billId}_k${ky}`;
+        const fromThuChi = thuChiByLine.get(lineKey) ?? 0;
+        if (fromThuChi > 0 && newDaHoan !== curDaHoan && !confirmManualDaHoanOverride) {
+          const lk = `${it.billId}_k${ky}`;
+          conflictByLineKey.set(lk, {
+            billId: it.billId,
+            ky,
+            customerCode: customerByBillId.get(it.billId) ?? "",
+            daHoanFromThuChi: fromThuChi,
+            prevDaHoan: curDaHoan,
+            nextDaHoan: newDaHoan,
+          });
+        }
+      }
+    }
+
+    const conflictLines = [...conflictByLineKey.values()];
+    if (conflictLines.length > 0 && !confirmManualDaHoanOverride) {
+      throw new ServiceError(
+        409,
+        "Một hoặc nhiều dòng đã có phân bổ «Đã hoàn» từ bảng thu chi. Để sửa số nhập tay, gửi lại yêu cầu với confirmManualDaHoanOverride = true (sau khi người dùng xác nhận trên giao diện).",
+        {
+          code: "REFUND_MANUAL_NEEDS_CONFIRM",
+          lines: conflictLines,
+        }
+      );
+    }
+
+    const out: RefundLineStateDto[] = [];
 
     for (const it of items) {
       if (!mongoose.isValidObjectId(it.billId)) {
@@ -608,6 +751,9 @@ export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyI
       const existing = await findRefundLineStateOne(it.billId, ky);
       const curDaHoan = typeof existing?.daHoan === "number" ? existing.daHoan : 0;
       const newDaHoan = it.daHoan !== undefined ? Number(it.daHoan) || 0 : curDaHoan;
+      const lineKey = `${it.billId}_k${ky}`;
+      const fromThuChi = thuChiByLine.get(lineKey) ?? 0;
+
       const anchor = refundAnchorDateUtc(anchorInput);
       const hasManualRule = feeRules.some(
         (r) =>
@@ -633,6 +779,12 @@ export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyI
         newPhi = resolved?.pct ?? null;
       }
 
+      const prevStatus = String(existing?.status ?? "").trim();
+      const statusTouched = it.status !== undefined;
+      const nextStatusNorm = newStatus;
+      const statusChanged = statusTouched && nextStatusNorm !== prevStatus;
+      const daHoanChanged = it.daHoan !== undefined && newDaHoan !== curDaHoan;
+
       const doc = await upsertRefundLineStateDoc(it.billId, ky, {
         agencyName,
         status: newStatus,
@@ -641,9 +793,45 @@ export async function patchRefundLineStates(body: { items?: RefundLinePatchBodyI
       });
 
       if (doc) out.push(serializeRefundLineStateDoc(doc.toObject()));
+
+      if (daHoanChanged || statusChanged) {
+        try {
+          await writeAuditLog({
+            actorUserId: actorId,
+            action: "electric.refund_line_patch",
+            entityType: "RefundLineState",
+            entityId: new mongoose.Types.ObjectId(it.billId),
+            metadata: {
+              customerCode: customerByBillId.get(it.billId) ?? "",
+              billId: it.billId,
+              ky,
+              agencyName,
+              prevDaHoan: curDaHoan,
+              nextDaHoan: newDaHoan,
+              prevStatus,
+              nextStatus: nextStatusNorm,
+              daHoanThuChiSnapshot: fromThuChi,
+              confirmManualDaHoanOverride,
+              changeSummary: [
+                daHoanChanged ? `đã hoàn (nhập tay) ${curDaHoan}→${newDaHoan}` : null,
+                statusChanged ? `trạng thái ${prevStatus || "—"}→${nextStatusNorm || "—"}` : null,
+              ]
+                .filter(Boolean)
+                .join("; "),
+            },
+            ip: ctx?.ip ?? null,
+            userAgent: ctx?.userAgent ?? null,
+          });
+        } catch (auditErr) {
+          console.error(
+            "[electric.refund_line_patch] audit write failed",
+            { billId: it.billId, ky, err: auditErr instanceof Error ? auditErr.message : String(auditErr) }
+          );
+        }
+      }
     }
 
-    return { data: { items: out }, source: "mongodb" };
+    return { data: { items: out }, source: "mongodb" as const };
   } catch (error) {
     if (error instanceof ServiceError) throw error;
     throw new ServiceError(500, getErrorMessage(error, "Cập nhật không thành công"));

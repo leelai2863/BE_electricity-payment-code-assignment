@@ -2,7 +2,7 @@ import { RefundFeeRule } from "@/models/RefundFeeRule";
 import { refundAnchorDateUtc, type MailQueueAnchorInput } from "@/lib/refund-anchor-date";
 import type { RefundFeeRuleDto } from "@/types/electric-bill";
 
-function normalizeTextKey(input: string): string {
+export function normalizeTextKey(input: string): string {
   return input
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")

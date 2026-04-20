@@ -24,6 +24,10 @@ function auditActionForCentral(mongoAction: AuditAction): string {
     "checkbill.ingest_charges_snapshot": "elec.checkbill.ingest_charges_snapshot",
     "agency.create": "elec.agency.create",
     "auth.login": "elec.auth.login",
+    "accounting.thu_chi_create": "elec.accounting.thu_chi_create",
+    "accounting.thu_chi_update": "elec.accounting.thu_chi_update",
+    "accounting.thu_chi_delete": "elec.accounting.thu_chi_delete",
+    "electric.refund_line_patch": "elec.refund.line_patch",
   };
   return map[mongoAction] ?? `elec.${mongoAction}`;
 }
@@ -94,6 +98,37 @@ function buildViSummary(
       return "Tạo đại lý.";
     case "auth.login":
       return "Đăng nhập (elec).";
+    case "accounting.thu_chi_create": {
+      const src = String(m.source ?? "").trim();
+      const thu = m.thuVnd != null ? `Thu ${Number(m.thuVnd).toLocaleString("vi-VN")} đ` : "";
+      const chi = m.chiVnd != null ? `Chi ${Number(m.chiVnd).toLocaleString("vi-VN")} đ` : "";
+      const neo = String(m.linkedAgencyCode ?? "").trim();
+      const parts = [thu, chi].filter(Boolean).join(", ");
+      return `Kế toán — thêm dòng thu chi${parts ? ` (${parts})` : ""}${src ? `, nguồn «${src}»` : ""}${neo ? `, neo đại lý ${neo}` : ""}.`;
+    }
+    case "accounting.thu_chi_update": {
+      const id = String(m.entryId ?? "").trim();
+      return `Kế toán — sửa dòng thu chi${id ? ` (${id})` : ""}: ${String(m.changeSummary ?? "chi tiết trong metadata")}.`;
+    }
+    case "accounting.thu_chi_delete": {
+      const id = String(m.entryId ?? "").trim();
+      return `Kế toán — xóa dòng thu chi${id ? ` (${id})` : ""}.`;
+    }
+    case "electric.refund_line_patch": {
+      const mkh = String(m.customerCode ?? "").trim();
+      const ky = m.ky != null ? ` kỳ ${m.ky}` : "";
+      const prev = m.prevDaHoan != null ? Number(m.prevDaHoan) : null;
+      const next = m.nextDaHoan != null ? Number(m.nextDaHoan) : null;
+      const fromTc = m.daHoanThuChiSnapshot != null ? Number(m.daHoanThuChiSnapshot) : null;
+      let money = "";
+      if (prev != null && next != null && prev !== next) {
+        money = ` Đã hoàn (nhập tay) ${prev.toLocaleString("vi-VN")} → ${next.toLocaleString("vi-VN")} đ.`;
+      }
+      if (fromTc != null && fromTc > 0) {
+        money += ` Phân bổ từ thu chi tại thời điểm lưu: ${fromTc.toLocaleString("vi-VN")} đ.`;
+      }
+      return `Hoàn tiền — cập nhật dòng${mkh ? ` mã KH ${mkh}` : ""}${ky}.${money}`;
+    }
     default:
       return `Thao tác ${mongoAction} (${entityType}).`;
   }
