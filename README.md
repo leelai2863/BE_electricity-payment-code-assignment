@@ -10,7 +10,7 @@ Express + MongoDB API phục vụ hệ thống quản lý mã cước điện (V
 2. [Cấu trúc thư mục](#2-cấu-trúc-thư-mục)
 3. [Biến môi trường (.env)](#3-biến-môi-trường-env)
 4. [Chạy với Docker](#4-chạy-với-docker)
-5. [Deploy production (Docker, bảo mật)](#5-deploy-production-docker-bảo-mật)
+5. [Repo phụ & triển khai](#5-repo-phụ--triển-khai)
 6. [Chạy ở chế độ dev (không Docker)](#6-chạy-ở-chế-độ-dev-không-docker)
 7. [Import dữ liệu từ Excel](#7-import-dữ-liệu-từ-excel)
 8. [Cấu trúc cơ sở dữ liệu (MongoDB)](#8-cấu-trúc-cơ-sở-dữ-liệu-mongodb)
@@ -70,8 +70,7 @@ backend/
 │   └── restore-mongo-seed-to-docker.ps1  # Restore mongodump vào Docker
 ├── mongo-seed/                   # Dữ liệu khởi tạo MongoDB lần đầu (init scripts)
 ├── docker-compose.yml            # Dev: Mongo publish cổng host (27018)
-├── docker-compose.prod.yml       # Production: Mongo không publish cổng
-├── .env.example                  # Mẫu biến (dev + gợi ý prod); copy → `.env`
+├── .env.example                  # Mẫu biến (dev); copy → `.env`
 └── package.json
 ```
 
@@ -144,70 +143,17 @@ curl http://localhost:3001/health
 
 ---
 
-## 5. Deploy production (Docker, bảo mật)
+## 5. Repo phụ & triển khai
 
-**Tài liệu triển khai qua `scp` và chạy trên server:** [docs/DEPLOY-SCP-SERVER.md](docs/DEPLOY-SCP-SERVER.md).
+Đây là **repo phụ** (mirror mã nguồn): **không** chứa GitHub Actions, compose prod/deploy, hay tài liệu SCP/SSH/GHCR — toàn bộ quy trình CI/CD và triển khai thật nằm ở **repo / wiki nội bộ** của team.
 
-Dùng file [`docker-compose.prod.yml`](docker-compose.prod.yml) thay cho `docker-compose.yml` khi lên **server thật** (build image tại chỗ).
-
-**CI/CD (GitHub Actions + GHCR, không build trên server):** xem [docs/cicd-deploy.md](docs/cicd-deploy.md). Compose kéo image: [`docker-compose.deploy.yml`](docker-compose.deploy.yml).
-
-| So sánh | `docker-compose.yml` (dev) | `docker-compose.prod.yml` (prod) |
-|---------|---------------------------|-----------------------------------|
-| Mongo publish cổng host | Có (`27018:27017`) — seed từ máy, Compass | **Không** — Mongo chỉ lắng nghe trong mạng Docker |
-| `CORS_ORIGIN` | Mặc định theo `.env` | **Trên Internet:** set URL frontend thật (HTTPS) trong `.env` (compose có fallback localhost nếu quên) |
-| API ra ngoài | `3001:3001` (đổi được `BACKEND_HOST_PORT`) | Mặc định **`1389:3001`** (tunnel); đổi `BACKEND_HOST_PORT` trong `.env` nếu cần |
-
-### Khởi động trên server
-
-```bash
-cd backend
-cp .env.example .env
-# Sửa .env: CORS_ORIGIN=https://app.cua-ban.com, BACKEND_HOST_PORT=1389 (mặc định compose đã 1389 nếu không set)
-
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-- Compose đọc biến substitute từ file **`.env`** cùng thư mục (không cần `--env-file` riêng).
-- Backend nội bộ vẫn dùng `MONGODB_URI=mongodb://mongo:27017/giaodich_voucher` — **không cần** mở Mongo ra internet.
-- Tunnel/reverse proxy trỏ HTTPS tới cổng host backend (mặc định **1389**), ví dụ `https://giaoma.nguyentrungnam.com` → `127.0.0.1:1389`.
-
-### Seed lần đầu (bắt buộc — volume Mongo mới)
-
-Thư mục `mongo-seed/` chỉ dùng cho script init Mongo khi volume **trống**; hiện không thay cho seed ứng dụng. Sau lần đầu stack chạy ổn định (Mongo healthy, `giaodich-backend` up), chạy **một lần**:
+- Chạy local: [`docker-compose.yml`](docker-compose.yml) (mục 4).
+- Seed lần đầu sau khi `docker compose up` ổn định:
 
 ```bash
 npm run docker:seed
-# hoặc trên Linux:
-# sh scripts/first-run-seed.sh
+# hoặc: sh scripts/first-run-seed.sh
 ```
-
-Lệnh này chạy trong container: `seed-vgreen-electric-bills` + `seed-voucher-codes`. Lặp lại khi tạo volume Mongo mới hoặc môi trường mới.
-
-### Liên kết domain với fe-gateway
-
-| Nơi cấu hình | Biến | Giá trị mẫu |
-|--------------|------|-------------|
-| **core-x-gateway** `.env` | `ELEC_SERVICE_URL` | `https://giaoma.nguyentrungnam.com` (HTTPS, **không** thêm `/api`) |
-| **BE** `.env` | `CORS_ORIGIN` | URL CRM mà browser mở (một origin), ví dụ `https://crm.example.com` |
-| **CRM build** | `VITE_GATEWAY_PUBLIC_URL` / `VITE_IAM_PUBLIC_URL` | URL public gateway / IAM (docker-compose `args` hoặc env build) |
-
-Gateway proxy: `/api/billing-scan`, `/api/electric-bills`, `/api/vouchers`, `/api/agencies`, … → cùng path trên BE.
-
-### Import Excel trên prod (Mongo không mở cổng host)
-
-Script đã được copy vào image (`Dockerfile` có `COPY scripts`). Trên server:
-
-```bash
-# Copy file Excel vào container
-docker cp ./maHĐ.xlsx giaodich-backend:/tmp/maHĐ.xlsx
-
-# Chạy import (URI nội bộ giống backend)
-docker compose -f docker-compose.prod.yml exec backend \
-  sh -c 'MONGODB_URI=mongodb://mongo:27017/giaodich_voucher npx tsx scripts/import-billing-from-xlsx.ts /tmp/maHĐ.xlsx'
-```
-
-Hoặc dùng CI/CD chạy job one-off trên cùng Docker network với `MONGODB_URI=mongodb://mongo:27017/...`.
 
 ---
 
@@ -468,6 +414,4 @@ Script dùng `mongorestore --drop` — sẽ **ghi đè** collection hiện có.
 | `npm run build` | TypeScript type-check |
 | `npm run seed:billing -- ./file.xlsx` | **Import Excel cước → electricbillrecords** |
 | `npm run docker:restore-mongo-seed` | Restore mongodump vào Docker Mongo |
-| `npm run docker:prod:up` | Production: `docker compose -f docker-compose.prod.yml` (biến trong `.env`) |
-| `npm run docker:prod:down` | Dừng stack production |
 | `npm run docker:seed` | Trong container `giaodich-backend`: V-GREEN bills + voucher seed (sau lần đầu `up`) |
