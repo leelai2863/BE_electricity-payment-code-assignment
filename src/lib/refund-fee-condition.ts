@@ -11,12 +11,30 @@ const ALLOWED: readonly RefundFeeRuleConditionType[] = [
   "wait",
 ];
 
+/** Alias từ snake_case / biến thể (tránh lệch với camelCase `cardType`). */
+const CONDITION_ALIASES: Record<string, RefundFeeRuleConditionType> = {
+  card_type: "cardType",
+};
+
+/**
+ * Chuẩn hóa `conditionType` từ body API / Mongo.
+ *
+ * Lỗi đã gặp: FE gửi `"cardType"` → so sánh sau `.toLowerCase()` thành `"cardtype"`
+ * nhưng danh sách cho phép chỉ có `"cardType"` → không khớp → fallback `"manual"` (TỰ DO trên UI).
+ * Cần so khớp không phân biệt hoa thường với **giá trị chuẩn** (canonical), không với chuỗi đã lower toàn bộ.
+ */
 export function normalizeRefundFeeConditionInput(
   value: unknown,
   fallback: RefundFeeRuleConditionType
 ): RefundFeeRuleConditionType {
-  const s = String(value ?? "").trim().toLowerCase();
-  if ((ALLOWED as readonly string[]).includes(s)) return s as RefundFeeRuleConditionType;
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  const key = raw.toLowerCase().replace(/-/g, "_");
+  const alias = CONDITION_ALIASES[key];
+  if (alias) return alias;
+  for (const ct of ALLOWED) {
+    if (ct.toLowerCase() === raw.toLowerCase()) return ct;
+  }
   return fallback;
 }
 
