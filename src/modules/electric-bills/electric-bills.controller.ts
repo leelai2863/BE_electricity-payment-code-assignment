@@ -42,6 +42,15 @@ function handleError(res: Response, error: unknown, fallbackMessage: string) {
   res.status(500).json({ error: message });
 }
 
+function customerAgencyScopeOr403(req: Request, res: Response): string | null | "__denied__" {
+  try {
+    return requiredAgencyScopeIdForCustomer(req);
+  } catch {
+    res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+    return "__denied__";
+  }
+}
+
 export async function postDataExportAuditHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
@@ -85,6 +94,12 @@ export async function getUnassignedHandler(req: Request, res: Response) {
 
 export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chạy đồng bộ hàng chờ giao." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const billIds = Array.isArray(body.billIds) ? (body.billIds as unknown[]).filter((x) => typeof x === "string") : undefined;
     const rawTargeted = body.targeted;
@@ -118,13 +133,8 @@ export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res
 
 export async function getInvoiceListHandler(req: Request, res: Response) {
   try {
-    let agencyScopeId: string | null;
-    try {
-      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
-    } catch {
-      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
-      return;
-    }
+    const agencyScopeId = customerAgencyScopeOr403(req, res);
+    if (agencyScopeId === "__denied__") return;
     if (agencyScopeId && typeof req.query.assignedAgencyName === "string" && req.query.assignedAgencyName.trim()) {
       res.status(403).json({ error: "Không được lọc theo đại lý ngoài phạm vi được cấp." });
       return;
@@ -138,13 +148,8 @@ export async function getInvoiceListHandler(req: Request, res: Response) {
 
 export async function getInvoiceCompletedMonthsHandler(_req: Request, res: Response) {
   try {
-    let agencyScopeId: string | null;
-    try {
-      agencyScopeId = requiredAgencyScopeIdForCustomer(_req);
-    } catch {
-      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
-      return;
-    }
+    const agencyScopeId = customerAgencyScopeOr403(_req, res);
+    if (agencyScopeId === "__denied__") return;
     const result = await getInvoiceCompletedMonths({ agencyScopeId });
     res.json(result);
   } catch (error) {
@@ -154,13 +159,8 @@ export async function getInvoiceCompletedMonthsHandler(_req: Request, res: Respo
 
 export async function getInvoiceCompletedHandler(req: Request, res: Response) {
   try {
-    let agencyScopeId: string | null;
-    try {
-      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
-    } catch {
-      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
-      return;
-    }
+    const agencyScopeId = customerAgencyScopeOr403(req, res);
+    if (agencyScopeId === "__denied__") return;
     const result = await getInvoiceCompleted(req.query, { agencyScopeId });
     res.json(result);
   } catch (error) {
@@ -170,13 +170,8 @@ export async function getInvoiceCompletedHandler(req: Request, res: Response) {
 
 export async function getMailQueueHandler(_req: Request, res: Response) {
   try {
-    let agencyScopeId: string | null;
-    try {
-      agencyScopeId = requiredAgencyScopeIdForCustomer(_req);
-    } catch {
-      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
-      return;
-    }
+    const agencyScopeId = customerAgencyScopeOr403(_req, res);
+    if (agencyScopeId === "__denied__") return;
     const result = await getMailQueue({ agencyScopeId });
     res.json(result);
   } catch (error) {
@@ -186,6 +181,12 @@ export async function getMailQueueHandler(_req: Request, res: Response) {
 
 export async function createRefundFeeRuleHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục phí." });
+      return;
+    }
     const result = await createRefundFeeRule(req.body);
     res.status(201).json(result);
   } catch (error) {
@@ -195,6 +196,12 @@ export async function createRefundFeeRuleHandler(req: Request, res: Response) {
 
 export async function listRefundFeeRulesHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem danh mục phí." });
+      return;
+    }
     const result = await listRefundFeeRules(req.query);
     res.json(result);
   } catch (error) {
@@ -204,6 +211,12 @@ export async function listRefundFeeRulesHandler(req: Request, res: Response) {
 
 export async function updateRefundFeeRuleHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục phí." });
+      return;
+    }
     const result = await updateRefundFeeRule(String(req.params.id), req.body);
     res.json(result);
   } catch (error) {
@@ -213,6 +226,12 @@ export async function updateRefundFeeRuleHandler(req: Request, res: Response) {
 
 export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục phí." });
+      return;
+    }
     const result = await removeRefundFeeRule(String(req.params.id));
     res.json(result);
   } catch (error) {
@@ -222,13 +241,8 @@ export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
 
 export async function patchRefundLineStatesHandler(req: Request, res: Response) {
   try {
-    let agencyScopeId: string | null = null;
-    try {
-      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
-    } catch {
-      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
-      return;
-    }
+    const agencyScopeId = customerAgencyScopeOr403(req, res);
+    if (agencyScopeId === "__denied__") return;
     if (agencyScopeId) {
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa trạng thái hoàn tiền." });
       return;
@@ -250,6 +264,12 @@ export async function patchRefundLineStatesHandler(req: Request, res: Response) 
 
 export async function migrateRefundLocalStorageHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được migrate dữ liệu cục bộ." });
+      return;
+    }
     const result = await migrateRefundLocalStorage(req.body);
     res.json(result);
   } catch (error) {
@@ -259,6 +279,12 @@ export async function migrateRefundLocalStorageHandler(req: Request, res: Respon
 
 export async function getAssignedCodesHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem danh sách giao mã." });
+      return;
+    }
     const result = await getAssignedCodes(req.query);
     res.json(result);
   } catch (error) {
@@ -268,6 +294,12 @@ export async function getAssignedCodesHandler(req: Request, res: Response) {
 
 export async function assignAgencyHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý chỉ được xem danh sách hóa đơn." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const result = await assignAgency(
       body as { billId: string; agencyId: string; agencyName: string; actorUserId?: string },
@@ -281,6 +313,12 @@ export async function assignAgencyHandler(req: Request, res: Response) {
 
 export async function patchElectricBillHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý chỉ được xem danh sách hóa đơn." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const result = await patchElectricBill(
       String(req.params.id),
@@ -295,6 +333,12 @@ export async function patchElectricBillHandler(req: Request, res: Response) {
 
 export async function createManualElectricBillHandler(req: Request, res: Response) {
   try {
+    const customerScope = customerAgencyScopeOr403(req, res);
+    if (customerScope === "__denied__") return;
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được thêm hóa đơn nhập tay." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const result = await createManualElectricBill(body, fujiAuditActorLabelsFromRequest(req));
     res.status(201).json(result);

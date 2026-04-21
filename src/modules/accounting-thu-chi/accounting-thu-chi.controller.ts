@@ -38,6 +38,10 @@ export async function listThuChiHandler(req: Request, res: Response) {
       res.status(403).json({ error: "Không được lọc theo đại lý ngoài phạm vi được cấp." });
       return;
     }
+    if (agencyScopeId) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem bảng thu chi." });
+      return;
+    }
     const result = await listThuChi(req.query as Record<string, unknown>, { agencyScopeId });
     res.json(result);
   } catch (error) {
@@ -52,6 +56,10 @@ export async function getThuChiByIdHandler(req: Request, res: Response) {
       agencyScopeId = requiredAgencyScopeIdForCustomer(req);
     } catch {
       res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (agencyScopeId) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem bảng thu chi." });
       return;
     }
     const result = await getThuChiById(String(req.params.id), { agencyScopeId });
@@ -147,6 +155,17 @@ export async function removeThuChiHandler(req: Request, res: Response) {
 
 export async function listThuChiBankCatalogHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem danh mục ngân hàng thu chi." });
+      return;
+    }
     const result = await listThuChiBankCatalog(req.query as Record<string, unknown>);
     res.json(result);
   } catch (error) {
