@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { Buffer } from "node:buffer";
 
 function headerString(req: Request, name: string): string | undefined {
   const v = req.headers[name.toLowerCase()] ?? req.headers[name];
@@ -13,6 +14,26 @@ function headerString(req: Request, name: string): string | undefined {
 export function attachFujiIdentityFromHeaders(req: Request, _res: Response, next: NextFunction): void {
   const uid = headerString(req, "x-fuji-user-id");
   if (uid) req.fujiUserId = uid;
+
+  const email = headerString(req, "x-fuji-user-email");
+  if (email && email.includes("@")) {
+    req.fujiUserEmail = email;
+  }
+
+  const nameB64 = headerString(req, "x-fuji-user-display-name-b64");
+  if (nameB64) {
+    try {
+      const decoded = Buffer.from(nameB64, "base64url").toString("utf8").trim();
+      if (decoded) req.fujiUserDisplayName = decoded;
+    } catch {
+      try {
+        const decoded2 = Buffer.from(nameB64, "base64").toString("utf8").trim();
+        if (decoded2) req.fujiUserDisplayName = decoded2;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 
   const rolesRaw = headerString(req, "x-fuji-user-roles");
   if (rolesRaw) {

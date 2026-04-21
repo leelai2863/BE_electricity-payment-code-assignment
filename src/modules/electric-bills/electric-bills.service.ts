@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { writeAuditLog } from "@/lib/audit";
+import type { FujiAuditActorLabels } from "@/lib/fuji-actor";
 import { serializeElectricBill, billHasIncompletePeriod } from "@/lib/electric-bill-serialize";
 import { isPeriodReadyForDealCompletion } from "@/lib/electric-bill-completion";
 import { periodsDtoToMongoSchema } from "@/lib/electric-bill-mongo-periods";
@@ -89,6 +90,40 @@ async function checkAssignedCodeConflict(
 }
 
 export { ServiceError };
+
+/** Ghi nhận người dùng đã xuất tệp (Excel/CSV) — CRM gọi sau khi tạo tệp cục bộ thành công. */
+export async function recordDataExportAudit(params: {
+  actorUserId: string;
+  exportKind: string;
+  metadata?: Record<string, unknown>;
+  ip?: string | null;
+  userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
+}): Promise<void> {
+  const id = String(params.actorUserId ?? "").trim();
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ServiceError(400, "actorUserId không hợp lệ");
+  }
+  const kind = params.exportKind.trim();
+  if (!kind) {
+    throw new ServiceError(400, "exportKind là bắt buộc");
+  }
+  await writeAuditLog({
+    actorUserId: id,
+    action: "electric.data_export",
+    entityType: "data_export",
+    entityId: id,
+    metadata: {
+      export_kind: kind,
+      ...(params.metadata ?? {}),
+    },
+    ip: params.ip ?? null,
+    userAgent: params.userAgent ?? null,
+    actorEmail: params.actorEmail,
+    actorDisplayName: params.actorDisplayName,
+  });
+}
 
 function omitEvnField<T extends { evn?: unknown }>(row: T): Omit<T, "evn"> {
   const { evn: _evn, ...rest } = row;
@@ -612,7 +647,13 @@ function resolveRefundPatchActorId(raw?: string | null): mongoose.Types.ObjectId
 
 export async function patchRefundLineStates(
   body: { items?: RefundLinePatchBodyItem[]; confirmManualDaHoanOverride?: boolean },
-  ctx?: { actorUserId?: string; ip?: string | null; userAgent?: string | null }
+  ctx?: {
+    actorUserId?: string;
+    ip?: string | null;
+    userAgent?: string | null;
+    actorEmail?: string | null;
+    actorDisplayName?: string | null;
+  }
 ) {
   const items = Array.isArray(body.items) ? body.items : [];
   const confirmManualDaHoanOverride = Boolean(body.confirmManualDaHoanOverride);
@@ -820,6 +861,8 @@ export async function patchRefundLineStates(
             },
             ip: ctx?.ip ?? null,
             userAgent: ctx?.userAgent ?? null,
+            actorEmail: ctx?.actorEmail,
+            actorDisplayName: ctx?.actorDisplayName,
           });
         } catch (auditErr) {
           console.error(
@@ -939,12 +982,15 @@ export async function getAssignedCodes(query: Record<string, unknown>) {
   }
 }
 
-export async function assignAgency(body: {
-  billId: string;
-  agencyId: string;
-  agencyName: string;
-  actorUserId?: string;
-}) {
+export async function assignAgency(
+  body: {
+    billId: string;
+    agencyId: string;
+    agencyName: string;
+    actorUserId?: string;
+  },
+  auditLabels?: FujiAuditActorLabels
+) {
   if (!body.billId || !body.agencyId || !body.agencyName) {
     throw new ServiceError(400, "Cần có billId, agencyId và agencyName");
   }
@@ -1030,6 +1076,8 @@ export async function assignAgency(body: {
       agencyName: body.agencyName,
       customerCode: doc.customerCode,
     },
+    actorEmail: auditLabels?.actorEmail,
+    actorDisplayName: auditLabels?.actorDisplayName,
   });
 
   return {
@@ -1148,7 +1196,7 @@ function mergeManualPeriodsFromBody(raw: unknown): ElectricBillPeriod[] {
 }
 
 /** Nhập tay hóa đơn (Danh sách hóa đơn) — một bản ghi / tháng / mã KH; STT do UI tính theo danh sách. */
-export async function createManualElectricBill(body: Record<string, unknown>) {
+export async function createManualElectricBill(body: Record<string, unknown>, auditLabels?: FujiAuditActorLabels) {
   const actorRoles = Array.isArray(body.actorRoles)
     ? body.actorRoles
         .filter((x): x is string => typeof x === "string")
@@ -1347,6 +1395,8 @@ export async function createManualElectricBill(body: Record<string, unknown>) {
       ...(evnKyBillThang !== undefined ? { evnKyBillThang } : {}),
       ...(evnKyBillNam !== undefined ? { evnKyBillNam } : {}),
     },
+    actorEmail: auditLabels?.actorEmail,
+    actorDisplayName: auditLabels?.actorDisplayName,
   });
 
   return {
@@ -1355,7 +1405,7 @@ export async function createManualElectricBill(body: Record<string, unknown>) {
   };
 }
 
-export async function patchElectricBill(id: string, body: PatchBody) {
+export async function patchElectricBill(id: string, body: PatchBody, auditLabels?: FujiAuditActorLabels) {
   if (!mongoose.isValidObjectId(id)) {
     throw new ServiceError(400, "id phải là _id MongoDB (ObjectId)");
   }
@@ -1581,6 +1631,8 @@ export async function patchElectricBill(id: string, body: PatchBody) {
         customerCode: doc.customerCode,
         patchedFields: Object.keys(body).filter((k) => k !== "actorUserId" && k !== "actorRoles"),
       },
+      actorEmail: auditLabels?.actorEmail,
+      actorDisplayName: auditLabels?.actorDisplayName,
     });
 
     return {

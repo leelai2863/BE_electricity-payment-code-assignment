@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import type { Request, Response } from "express";
 import { writeAuditLog } from "@/lib/audit";
+import { fujiAuditActorLabelsFromRequest } from "@/lib/fuji-actor";
 import { BillingScanService } from "./billing-scan.service";
 
 export const BillingScanController = {
@@ -43,6 +44,7 @@ export const BillingScanController = {
         };
         if (p?.ok) {
           try {
+            const labels = fujiAuditActorLabelsFromRequest(req);
             await writeAuditLog({
               actorUserId: req.fujiUserId,
               action: "billing_scan.approve_staging",
@@ -55,6 +57,8 @@ export const BillingScanController = {
               },
               ip: req.ip,
               userAgent: req.get("user-agent") ?? null,
+              actorEmail: labels.actorEmail,
+              actorDisplayName: labels.actorDisplayName,
             });
           } catch {
             /* audit không chặn response */
@@ -79,6 +83,7 @@ export const BillingScanController = {
         };
         if (p?.data) {
           try {
+            const labels = fujiAuditActorLabelsFromRequest(req);
             await writeAuditLog({
               actorUserId: req.fujiUserId,
               action: "billing_scan.approve_staging_batch",
@@ -92,6 +97,8 @@ export const BillingScanController = {
               },
               ip: req.ip,
               userAgent: req.get("user-agent") ?? null,
+              actorEmail: labels.actorEmail,
+              actorDisplayName: labels.actorDisplayName,
             });
           } catch {
             /* ignore */
@@ -117,6 +124,7 @@ export const BillingScanController = {
         };
         if (p?.ok && p.data) {
           try {
+            const labels = fujiAuditActorLabelsFromRequest(req);
             await writeAuditLog({
               actorUserId: req.fujiUserId,
               action: "billing_scan.revoke_scan_approval",
@@ -129,6 +137,8 @@ export const BillingScanController = {
               },
               ip: req.ip,
               userAgent: req.get("user-agent") ?? null,
+              actorEmail: labels.actorEmail,
+              actorDisplayName: labels.actorDisplayName,
             });
           } catch {
             /* ignore */

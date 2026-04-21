@@ -28,6 +28,7 @@ function auditActionForCentral(mongoAction: AuditAction): string {
     "accounting.thu_chi_update": "elec.accounting.thu_chi_update",
     "accounting.thu_chi_delete": "elec.accounting.thu_chi_delete",
     "electric.refund_line_patch": "elec.refund.line_patch",
+    "electric.data_export": "elec.data_export",
   };
   return map[mongoAction] ?? `elec.${mongoAction}`;
 }
@@ -129,6 +130,12 @@ function buildViSummary(
       }
       return `Hoàn tiền — cập nhật dòng${mkh ? ` mã KH ${mkh}` : ""}${ky}.${money}`;
     }
+    case "electric.data_export": {
+      const kind = String(m.export_kind ?? m.exportKind ?? "").trim();
+      const hint = String(m.filename ?? m.label ?? "").trim();
+      const extra = [kind && `loại «${kind}»`, hint && `tệp ${hint}`].filter(Boolean).join(", ");
+      return extra ? `Xuất dữ liệu (${extra}).` : "Xuất dữ liệu (Excel / tệp).";
+    }
     default:
       return `Thao tác ${mongoAction} (${entityType}).`;
   }
@@ -142,6 +149,8 @@ export type ElecCrmAuditEmitParams = {
   metadata?: Record<string, unknown>;
   ip?: string | null;
   userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
 };
 
 /**
@@ -154,7 +163,22 @@ export function emitElecCrmAudit(params: ElecCrmAuditEmitParams): void {
 
     const actorStr = String(params.actorUserId);
     const entityIdStr = String(params.entityId);
-    const meta = { ...(params.metadata ?? {}) };
+    const meta: Record<string, unknown> = { ...(params.metadata ?? {}) };
+
+    const paramEmail = params.actorEmail != null ? String(params.actorEmail).trim() : "";
+    const paramName = params.actorDisplayName != null ? String(params.actorDisplayName).trim() : "";
+    const metaEmail = typeof meta.actorEmail === "string" && meta.actorEmail.includes("@") ? meta.actorEmail.trim() : "";
+    const metaName =
+      typeof meta.actorDisplayName === "string" && meta.actorDisplayName.trim() ? meta.actorDisplayName.trim() : "";
+    if (paramEmail.includes("@") && !metaEmail) {
+      meta.actorEmail = paramEmail;
+    }
+    if (paramName && !metaName) {
+      meta.actorDisplayName = paramName;
+    }
+
+    const resolvedEmail =
+      (typeof meta.actorEmail === "string" && meta.actorEmail.includes("@") ? meta.actorEmail.trim() : "") || "";
     const isSystemActor = actorStr === ELEC_SYSTEM_AUDIT_ACTOR_ID;
 
     const auditAction = auditActionForCentral(params.action);
@@ -163,6 +187,7 @@ export function emitElecCrmAudit(params: ElecCrmAuditEmitParams): void {
 
     logger.audit(summary, {
       userId: actorStr,
+      userEmail: resolvedEmail || undefined,
       ip: params.ip ?? undefined,
       userAgent: params.userAgent ?? undefined,
       event,

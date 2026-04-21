@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
+import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import type { PatchBody } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   enqueueUnassignedPaymentDeadlineSync,
@@ -22,6 +22,7 @@ import {
   assignAgency,
   patchElectricBill,
   createManualElectricBill,
+  recordDataExportAudit,
 } from "./electric-bills.service";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
@@ -35,6 +36,38 @@ function handleError(res: Response, error: unknown, fallbackMessage: string) {
 
   const message = error instanceof Error ? error.message : fallbackMessage;
   res.status(500).json({ error: message });
+}
+
+export async function postDataExportAuditHandler(req: Request, res: Response) {
+  try {
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const exportKind = typeof body.exportKind === "string" ? body.exportKind.trim() : "";
+    if (!exportKind) {
+      res.status(400).json({ error: "exportKind là bắt buộc" });
+      return;
+    }
+    if (!body.actorUserId) {
+      res.status(401).json({ error: "Thiếu định danh người dùng" });
+      return;
+    }
+    const meta =
+      body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
+        : {};
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    await recordDataExportAudit({
+      actorUserId: String(body.actorUserId),
+      exportKind,
+      metadata: meta,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "Không ghi nhận audit xuất dữ liệu");
+  }
 }
 
 export async function getUnassignedHandler(req: Request, res: Response) {
@@ -154,10 +187,13 @@ export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
 export async function patchRefundLineStatesHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await patchRefundLineStates(body as Parameters<typeof patchRefundLineStates>[0], {
       actorUserId: body.actorUserId as string | undefined,
       ip: req.ip ?? null,
       userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
     res.json(result);
   } catch (error) {
@@ -187,7 +223,8 @@ export async function assignAgencyHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const result = await assignAgency(
-      body as { billId: string; agencyId: string; agencyName: string; actorUserId?: string }
+      body as { billId: string; agencyId: string; agencyName: string; actorUserId?: string },
+      fujiAuditActorLabelsFromRequest(req)
     );
     res.json(result);
   } catch (error) {
@@ -198,7 +235,11 @@ export async function assignAgencyHandler(req: Request, res: Response) {
 export async function patchElectricBillHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
-    const result = await patchElectricBill(String(req.params.id), body as PatchBody);
+    const result = await patchElectricBill(
+      String(req.params.id),
+      body as PatchBody,
+      fujiAuditActorLabelsFromRequest(req)
+    );
     res.json(result);
   } catch (error) {
     handleError(res, error, "Cập nhật không thành công");
@@ -208,7 +249,7 @@ export async function patchElectricBillHandler(req: Request, res: Response) {
 export async function createManualElectricBillHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
-    const result = await createManualElectricBill(body);
+    const result = await createManualElectricBill(body, fujiAuditActorLabelsFromRequest(req));
     res.status(201).json(result);
   } catch (error) {
     handleError(res, error, "Không tạo được hóa đơn");

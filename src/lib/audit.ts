@@ -13,6 +13,9 @@ export async function writeAuditLog(params: {
   metadata?: Record<string, unknown>;
   ip?: string | null;
   userAgent?: string | null;
+  /** Bổ sung khi metadata chưa có (vd. giao mã điện) — CRM hiển thị cột «Người thực hiện». */
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
 }) {
   await AuditLog.create({
     actorUserId: params.actorUserId,
@@ -32,5 +35,7 @@ export async function writeAuditLog(params: {
     metadata: params.metadata,
     ip: params.ip,
     userAgent: params.userAgent,
+    actorEmail: params.actorEmail,
+    actorDisplayName: params.actorDisplayName,
   });
 }

@@ -24,17 +24,23 @@ type OcrVoucherInput = {
   cccdBase64?: string;
   billBase64?: string;
   actorUserId?: string;
+  actorEmail?: string;
+  actorDisplayName?: string;
 };
 
 type UpdateVoucherProfileInput = {
   id: string;
   customerProfile: Record<string, unknown>;
   actorUserId?: string;
+  actorEmail?: string;
+  actorDisplayName?: string;
 };
 
 type ApproveVoucherInput = {
   id: string;
   actorUserId?: string;
+  actorEmail?: string;
+  actorDisplayName?: string;
 };
 
 function toActorObjectId(actorRaw?: string) {
@@ -99,6 +105,8 @@ export async function ocrVoucher(input: OcrVoucherInput) {
         entityType: "VoucherCode",
         entityId: voucherId,
         metadata: { fields: Object.keys(merged) },
+        actorEmail: input.actorEmail,
+        actorDisplayName: input.actorDisplayName,
       });
     }
 
@@ -127,6 +135,8 @@ export async function updateVoucherProfile(input: UpdateVoucherProfileInput) {
       entityType: "VoucherCode",
       entityId: voucherId,
       metadata: { manualProfileUpdate: true },
+      actorEmail: input.actorEmail,
+      actorDisplayName: input.actorDisplayName,
     });
 
     return { ok: true, voucher: doc };
@@ -162,6 +172,8 @@ export async function approveVoucher(input: ApproveVoucherInput) {
       entityType: "VoucherCode",
       entityId: voucherId,
       metadata: { approvedAt: approvedAt.toISOString() },
+      actorEmail: input.actorEmail,
+      actorDisplayName: input.actorDisplayName,
     });
 
     return {

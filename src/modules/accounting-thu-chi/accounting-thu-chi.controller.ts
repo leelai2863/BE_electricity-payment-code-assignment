@@ -1,7 +1,17 @@
 import type { Request, Response } from "express";
-import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
+import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
-import { createThuChi, getThuChiById, listThuChi, removeThuChi, updateThuChi } from "./accounting-thu-chi.service";
+import {
+  createThuChi,
+  createThuChiBankCatalog,
+  deleteThuChiBankCatalog,
+  getThuChiById,
+  listThuChi,
+  listThuChiBankCatalog,
+  removeThuChi,
+  updateThuChi,
+  updateThuChiBankCatalog,
+} from "./accounting-thu-chi.service";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
   if (error instanceof ServiceError) {
@@ -36,10 +46,13 @@ export async function getThuChiByIdHandler(req: Request, res: Response) {
 export async function createThuChiHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await createThuChi(body, {
       actorUserId: body.actorUserId as string | undefined,
       ip: req.ip ?? null,
       userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
     res.status(201).json(result);
   } catch (error) {
@@ -50,10 +63,13 @@ export async function createThuChiHandler(req: Request, res: Response) {
 export async function updateThuChiHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await updateThuChi(String(req.params.id), body, {
       actorUserId: body.actorUserId as string | undefined,
       ip: req.ip ?? null,
       userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
     res.json(result);
   } catch (error) {
@@ -64,13 +80,52 @@ export async function updateThuChiHandler(req: Request, res: Response) {
 export async function removeThuChiHandler(req: Request, res: Response) {
   try {
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await removeThuChi(String(req.params.id), {
       actorUserId: body.actorUserId as string | undefined,
       ip: req.ip ?? null,
       userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không xóa được");
+  }
+}
+
+export async function listThuChiBankCatalogHandler(req: Request, res: Response) {
+  try {
+    const result = await listThuChiBankCatalog(req.query as Record<string, unknown>);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không đọc được danh mục ngân hàng");
+  }
+}
+
+export async function createThuChiBankCatalogHandler(req: Request, res: Response) {
+  try {
+    const result = await createThuChiBankCatalog((req.body ?? {}) as Record<string, unknown>);
+    res.status(201).json(result);
+  } catch (error) {
+    handleError(res, error, "Không tạo được ngân hàng");
+  }
+}
+
+export async function updateThuChiBankCatalogHandler(req: Request, res: Response) {
+  try {
+    const result = await updateThuChiBankCatalog(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không cập nhật được ngân hàng");
+  }
+}
+
+export async function deleteThuChiBankCatalogHandler(req: Request, res: Response) {
+  try {
+    const result = await deleteThuChiBankCatalog(String(req.params.id));
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không xóa được ngân hàng");
   }
 }

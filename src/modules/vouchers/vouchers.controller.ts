@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { mergeBodyWithFujiActor } from "@/lib/fuji-actor";
+import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 import {
   getVouchers,
   ocrVoucher,
@@ -37,11 +37,14 @@ export async function ocrVoucherController(req: Request, res: Response) {
       actorUserId?: string;
     };
 
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await ocrVoucher({
       id,
       cccdBase64: body.cccdBase64,
       billBase64: body.billBase64,
       actorUserId: body.actorUserId,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
 
     res.json(result);
@@ -63,10 +66,13 @@ export async function updateVoucherProfileController(req: Request, res: Response
   }
 
   try {
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await updateVoucherProfile({
       id,
       customerProfile: body.customerProfile,
       actorUserId: body.actorUserId,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
 
     res.json(result);
@@ -82,9 +88,12 @@ export async function approveVoucherController(req: Request, res: Response) {
       actorUserId?: string;
     };
 
+    const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await approveVoucher({
       id,
       actorUserId: body.actorUserId,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
 
     res.json(result);

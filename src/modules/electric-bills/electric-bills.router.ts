@@ -16,6 +16,7 @@ import {
   assignAgencyHandler,
   patchElectricBillHandler,
   createManualElectricBillHandler,
+  postDataExportAuditHandler,
 } from "./electric-bills.controller";
 
 const router = Router();
@@ -35,6 +36,7 @@ router.post("/refund-migrate-localstorage", migrateRefundLocalStorageHandler);
 router.get("/assigned-codes", getAssignedCodesHandler);
 router.post("/assign", assignAgencyHandler);
 router.post("/manual", createManualElectricBillHandler);
+router.post("/audit/data-export", postDataExportAuditHandler);
 router.patch("/:id", patchElectricBillHandler);
 
 export default router;

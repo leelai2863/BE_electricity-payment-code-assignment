@@ -10,6 +10,12 @@ import {
   listAccountingThuChiEntries,
   updateAccountingThuChiDoc,
 } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
+import {
+  deleteBankCatalogById,
+  listBankCatalog,
+  updateBankCatalogById,
+  upsertBankCatalog,
+} from "@/modules/accounting-thu-chi/user-bank-preference.repository";
 
 /** Tạo mới: bỏ trống → null; giá trị không phải số hợp lệ → 400 */
 function parseMoneyCreate(raw: unknown, fieldLabel: string): number | null {
@@ -42,6 +48,8 @@ export type ThuChiAuditContext = {
   actorUserId?: string;
   ip?: string | null;
   userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
 };
 
 function resolveThuChiActorId(raw?: string | null): mongoose.Types.ObjectId {
@@ -196,6 +204,8 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
       },
       ip: ctx?.ip ?? null,
       userAgent: ctx?.userAgent ?? null,
+      actorEmail: ctx?.actorEmail,
+      actorDisplayName: ctx?.actorDisplayName,
     });
     return { data: serializeDoc(row), source: "mongodb" as const };
   } catch (error) {
@@ -277,6 +287,8 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
       },
       ip: ctx?.ip ?? null,
       userAgent: ctx?.userAgent ?? null,
+      actorEmail: ctx?.actorEmail,
+      actorDisplayName: ctx?.actorDisplayName,
     });
     return { data: serializeDoc(updated as Record<string, unknown>), source: "mongodb" as const };
   } catch (error) {
@@ -306,6 +318,56 @@ export async function removeThuChi(id: string, ctx?: ThuChiAuditContext) {
     },
     ip: ctx?.ip ?? null,
     userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
   });
+  return { ok: true, source: "mongodb" as const };
+}
+
+export async function listThuChiBankCatalog(query: Record<string, unknown>) {
+  await ensureDb();
+  const q = typeof query.q === "string" ? query.q.trim() : "";
+  const limit = Math.min(50, toPositiveInt(query.limit, 30));
+  try {
+    const items = await listBankCatalog({ q, limit });
+    return {
+      data: {
+        items: items.map((it) => ({
+          _id: String(it._id),
+          bank: it.bankDisplay,
+          usageCount: Number(it.usageCount ?? 0),
+          lastUsedAt: it.lastUsedAt instanceof Date ? it.lastUsedAt.toISOString() : new Date().toISOString(),
+        })),
+      },
+      source: "mongodb" as const,
+    };
+  } catch (error) {
+    throw new ServiceError(503, getErrorMessage(error, "Không đọc được danh mục ngân hàng"), { data: { items: [] } });
+  }
+}
+
+export async function createThuChiBankCatalog(body: Record<string, unknown>) {
+  await ensureDb();
+  const bank = typeof body.bank === "string" ? body.bank.trim() : "";
+  if (!bank) throw new ServiceError(400, "bank không hợp lệ");
+  await upsertBankCatalog(bank);
+  return { ok: true, source: "mongodb" as const };
+}
+
+export async function updateThuChiBankCatalog(id: string, body: Record<string, unknown>) {
+  await ensureDb();
+  if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const bank = typeof body.bank === "string" ? body.bank.trim() : "";
+  if (!bank) throw new ServiceError(400, "bank không hợp lệ");
+  const ok = await updateBankCatalogById(id, bank);
+  if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng");
+  return { ok: true, source: "mongodb" as const };
+}
+
+export async function deleteThuChiBankCatalog(id: string) {
+  await ensureDb();
+  if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const ok = await deleteBankCatalogById(id);
+  if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng");
   return { ok: true, source: "mongodb" as const };
 }
