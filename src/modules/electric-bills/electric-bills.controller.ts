@@ -1,5 +1,9 @@
 import type { Request, Response } from "express";
-import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
+import {
+  fujiAuditActorLabelsFromRequest,
+  mergeBodyWithFujiActor,
+  requiredAgencyScopeIdForCustomer,
+} from "@/lib/fuji-actor";
 import type { PatchBody } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   enqueueUnassignedPaymentDeadlineSync,
@@ -114,7 +118,18 @@ export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res
 
 export async function getInvoiceListHandler(req: Request, res: Response) {
   try {
-    const result = await getInvoiceList(req.query);
+    let agencyScopeId: string | null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (agencyScopeId && typeof req.query.assignedAgencyName === "string" && req.query.assignedAgencyName.trim()) {
+      res.status(403).json({ error: "Không được lọc theo đại lý ngoài phạm vi được cấp." });
+      return;
+    }
+    const result = await getInvoiceList(req.query, { agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được MongoDB");
@@ -123,7 +138,14 @@ export async function getInvoiceListHandler(req: Request, res: Response) {
 
 export async function getInvoiceCompletedMonthsHandler(_req: Request, res: Response) {
   try {
-    const result = await getInvoiceCompletedMonths();
+    let agencyScopeId: string | null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(_req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    const result = await getInvoiceCompletedMonths({ agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được MongoDB");
@@ -132,7 +154,14 @@ export async function getInvoiceCompletedMonthsHandler(_req: Request, res: Respo
 
 export async function getInvoiceCompletedHandler(req: Request, res: Response) {
   try {
-    const result = await getInvoiceCompleted(req.query);
+    let agencyScopeId: string | null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    const result = await getInvoiceCompleted(req.query, { agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được MongoDB");
@@ -141,7 +170,14 @@ export async function getInvoiceCompletedHandler(req: Request, res: Response) {
 
 export async function getMailQueueHandler(_req: Request, res: Response) {
   try {
-    const result = await getMailQueue();
+    let agencyScopeId: string | null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(_req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    const result = await getMailQueue({ agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được MongoDB");
@@ -186,6 +222,17 @@ export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
 
 export async function patchRefundLineStatesHandler(req: Request, res: Response) {
   try {
+    let agencyScopeId: string | null = null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (agencyScopeId) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa trạng thái hoàn tiền." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await patchRefundLineStates(body as Parameters<typeof patchRefundLineStates>[0], {

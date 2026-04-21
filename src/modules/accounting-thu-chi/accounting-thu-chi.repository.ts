@@ -21,6 +21,7 @@ export async function listAccountingThuChiEntries(params: {
   from?: Date;
   to?: Date;
   agencyCode?: string;
+  linkedAgencyId?: string;
   skip: number;
   limit: number;
 }): Promise<{ items: AccountingThuChiLean[]; total: number }> {
@@ -32,6 +33,9 @@ export async function listAccountingThuChiEntries(params: {
   }
   if (params.agencyCode?.trim()) {
     q.linkedAgencyCode = params.agencyCode.trim().toUpperCase();
+  }
+  if (params.linkedAgencyId?.trim()) {
+    q.linkedAgencyId = new mongoose.Types.ObjectId(params.linkedAgencyId.trim());
   }
 
   const [total, items] = await Promise.all([

@@ -52,6 +52,10 @@ export type ThuChiAuditContext = {
   actorDisplayName?: string | null;
 };
 
+type ThuChiReadScope = {
+  agencyScopeId?: string | null;
+};
+
 function resolveThuChiActorId(raw?: string | null): mongoose.Types.ObjectId {
   const s = typeof raw === "string" ? raw.trim() : "";
   if (s && mongoose.isValidObjectId(s)) return new mongoose.Types.ObjectId(s);
@@ -87,7 +91,7 @@ function parseTxnDate(raw: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export async function listThuChi(query: Record<string, unknown>) {
+export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiReadScope) {
   await ensureDb();
   try {
     const page = toPositiveInt(query.page, 1);
@@ -99,10 +103,15 @@ export async function listThuChi(query: Record<string, unknown>) {
     if (to && Number.isNaN(to.getTime())) throw new ServiceError(400, "Tham số to không hợp lệ");
     const agencyCode = typeof query.agencyCode === "string" ? query.agencyCode.trim() : undefined;
 
+    const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
+    if (agencyScopeId && !mongoose.isValidObjectId(agencyScopeId)) {
+      throw new ServiceError(403, "Không có quyền truy cập dữ liệu đại lý.");
+    }
     const { items, total } = await listAccountingThuChiEntries({
       from,
       to,
       agencyCode,
+      linkedAgencyId: agencyScopeId || undefined,
       skip: (page - 1) * pageSize,
       limit: pageSize,
     });
@@ -131,11 +140,18 @@ export async function listThuChi(query: Record<string, unknown>) {
   }
 }
 
-export async function getThuChiById(id: string) {
+export async function getThuChiById(id: string, scope?: ThuChiReadScope) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   const row = await findAccountingThuChiById(id);
   if (!row) throw new ServiceError(404, "Không tìm thấy bản ghi");
+  const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
+  if (agencyScopeId) {
+    const linkedAgencyId = row.linkedAgencyId ? String(row.linkedAgencyId) : "";
+    if (!linkedAgencyId || linkedAgencyId !== agencyScopeId) {
+      throw new ServiceError(403, "Không có quyền truy cập dữ liệu đại lý.");
+    }
+  }
   return {
     data: {
       _id: String(row._id),

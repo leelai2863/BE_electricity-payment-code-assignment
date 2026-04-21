@@ -46,5 +46,8 @@ export function attachFujiIdentityFromHeaders(req: Request, _res: Response, next
   const authType = headerString(req, "x-fuji-auth-type");
   if (authType) req.fujiAuthType = authType;
 
+  const agencyId = headerString(req, "x-fuji-agency-id");
+  if (agencyId) req.fujiAgencyId = agencyId;
+
   next();
 }

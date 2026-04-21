@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
+import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor, requiredAgencyScopeIdForCustomer } from "@/lib/fuji-actor";
 import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   createThuChi,
@@ -27,7 +27,18 @@ function handleError(res: Response, error: unknown, fallbackMessage: string) {
 
 export async function listThuChiHandler(req: Request, res: Response) {
   try {
-    const result = await listThuChi(req.query as Record<string, unknown>);
+    let agencyScopeId: string | null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (agencyScopeId && typeof req.query.agencyCode === "string" && req.query.agencyCode.trim()) {
+      res.status(403).json({ error: "Không được lọc theo đại lý ngoài phạm vi được cấp." });
+      return;
+    }
+    const result = await listThuChi(req.query as Record<string, unknown>, { agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được");
@@ -36,7 +47,14 @@ export async function listThuChiHandler(req: Request, res: Response) {
 
 export async function getThuChiByIdHandler(req: Request, res: Response) {
   try {
-    const result = await getThuChiById(String(req.params.id));
+    let agencyScopeId: string | null;
+    try {
+      agencyScopeId = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    const result = await getThuChiById(String(req.params.id), { agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được");
@@ -45,6 +63,17 @@ export async function getThuChiByIdHandler(req: Request, res: Response) {
 
 export async function createThuChiHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa bảng thu chi." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await createThuChi(body, {
@@ -62,6 +91,17 @@ export async function createThuChiHandler(req: Request, res: Response) {
 
 export async function updateThuChiHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa bảng thu chi." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await updateThuChi(String(req.params.id), body, {
@@ -79,6 +119,17 @@ export async function updateThuChiHandler(req: Request, res: Response) {
 
 export async function removeThuChiHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa bảng thu chi." });
+      return;
+    }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const labels = fujiAuditActorLabelsFromRequest(req);
     const result = await removeThuChi(String(req.params.id), {
@@ -105,6 +156,17 @@ export async function listThuChiBankCatalogHandler(req: Request, res: Response) 
 
 export async function createThuChiBankCatalogHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục ngân hàng." });
+      return;
+    }
     const result = await createThuChiBankCatalog((req.body ?? {}) as Record<string, unknown>);
     res.status(201).json(result);
   } catch (error) {
@@ -114,6 +176,17 @@ export async function createThuChiBankCatalogHandler(req: Request, res: Response
 
 export async function updateThuChiBankCatalogHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục ngân hàng." });
+      return;
+    }
     const result = await updateThuChiBankCatalog(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
     res.json(result);
   } catch (error) {
@@ -123,6 +196,17 @@ export async function updateThuChiBankCatalogHandler(req: Request, res: Response
 
 export async function deleteThuChiBankCatalogHandler(req: Request, res: Response) {
   try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục ngân hàng." });
+      return;
+    }
     const result = await deleteThuChiBankCatalog(String(req.params.id));
     res.json(result);
   } catch (error) {

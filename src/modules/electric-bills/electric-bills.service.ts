@@ -91,6 +91,10 @@ async function checkAssignedCodeConflict(
 
 export { ServiceError };
 
+type AgencyReadScope = {
+  agencyScopeId?: string | null;
+};
+
 /** Ghi nhận người dùng đã xuất tệp (Excel/CSV) — CRM gọi sau khi tạo tệp cục bộ thành công. */
 export async function recordDataExportAudit(params: {
   actorUserId: string;
@@ -158,9 +162,15 @@ export async function listUnassignedBills(query: Record<string, unknown>) {
   }
 }
 
-export async function getInvoiceList(query: Record<string, unknown>) {
+export async function getInvoiceList(query: Record<string, unknown>, scope?: AgencyReadScope) {
   const params = parseInvoiceListParams(query);
   const match = buildInvoiceListMatch(params);
+  const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
+  if (agencyScopeId) {
+    const and = Array.isArray(match.$and) ? [...(match.$and as Record<string, unknown>[])] : [];
+    and.push({ periods: { $elemMatch: { assignedAgencyId: agencyScopeId } } });
+    match.$and = and;
+  }
   const sort = invoiceListSort(params.sortBy, params.sortDir);
   const dbStarted = nowMs();
 
@@ -191,7 +201,17 @@ export async function getInvoiceList(query: Record<string, unknown>) {
     const docs = hasNext ? docsRaw.slice(0, params.pageSize) : docsRaw;
 
     const serializeStarted = nowMs();
-    const items = docs.map((d) => serializeElectricBill(d as Record<string, unknown>));
+    const items = docs
+      .map((d) => serializeElectricBill(d as Record<string, unknown>))
+      .map((bill) =>
+        agencyScopeId
+          ? {
+              ...bill,
+              periods: bill.periods.filter((p) => String(p.assignedAgencyId ?? "").trim() === agencyScopeId),
+            }
+          : bill
+      )
+      .filter((bill) => !agencyScopeId || bill.periods.length > 0);
     const serializeMs = nowMs() - serializeStarted;
     const nextCursor = hasNext ? String(docs[docs.length - 1]?._id ?? "") : null;
 
@@ -274,8 +294,9 @@ export async function getInvoiceList(query: Record<string, unknown>) {
   }
 }
 
-export async function getInvoiceCompletedMonths() {
+export async function getInvoiceCompletedMonths(scope?: AgencyReadScope) {
   await ensureDb();
+  const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
 
   try {
     const docs = await findBillsLean({}, { year: -1, month: -1 }, 5000);
@@ -283,7 +304,10 @@ export async function getInvoiceCompletedMonths() {
 
     for (const d of docs) {
       const bill = serializeElectricBill(d as Record<string, unknown>);
-      if (completedAmountPeriods(bill.periods).length === 0) continue;
+      const completed = completedAmountPeriods(bill.periods).filter((p) =>
+        agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true
+      );
+      if (completed.length === 0) continue;
       const k = `${bill.year}-${bill.month}`;
       if (!seen.has(k)) seen.set(k, { year: bill.year, month: bill.month });
     }
@@ -299,9 +323,10 @@ export async function getInvoiceCompletedMonths() {
   }
 }
 
-export async function getInvoiceCompleted(query: Record<string, unknown>) {
+export async function getInvoiceCompleted(query: Record<string, unknown>, scope?: AgencyReadScope) {
   const year = Number(query.year);
   const month = Number(query.month);
+  const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
 
   if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
     throw new ServiceError(400, "Tham số year và month (1–12) là bắt buộc", { data: [] });
@@ -313,7 +338,12 @@ export async function getInvoiceCompleted(query: Record<string, unknown>) {
     const docs = await findBillsByYearMonth(year, month);
     const data = docs
       .map((d) => serializeElectricBill(d as Record<string, unknown>))
-      .map((bill) => ({ ...bill, periods: completedAmountPeriods(bill.periods) }))
+      .map((bill) => ({
+        ...bill,
+        periods: completedAmountPeriods(bill.periods).filter((p) =>
+          agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true
+        ),
+      }))
       .map((bill) => omitEvnField(bill))
       .filter((bill) => bill.periods.length > 0);
 
@@ -324,7 +354,7 @@ export async function getInvoiceCompleted(query: Record<string, unknown>) {
 }
 
 /** Snapshot mail-queue + phân bổ thu chi — dùng cho GET và cho PATCH (kiểm tra xác nhận nhập tay). */
-async function buildMailQueueSnapshotInternal(): Promise<{
+async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<{
   data: MailQueueLineDto[];
   refundLineStates: RefundLineStateDto[];
   refundFeeRules: RefundFeeRuleDto[];
@@ -346,11 +376,13 @@ async function buildMailQueueSnapshotInternal(): Promise<{
     lineStateMap.set(`${dto.billId}_k${dto.ky}`, dto);
   }
   const feeRules = feeRuleDocs.map((x) => serializeRefundFeeRuleDoc(x));
+  const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
 
   for (const d of docs) {
     const bill = serializeElectricBill(d as Record<string, unknown>);
     for (const p of bill.periods) {
       if (!p.dealCompletedAt || p.amount == null) continue;
+      if (agencyScopeId && String(p.assignedAgencyId ?? "").trim() !== agencyScopeId) continue;
 
       lines.push({
         billId: bill._id,
@@ -449,11 +481,11 @@ async function buildMailQueueSnapshotInternal(): Promise<{
   };
 }
 
-export async function getMailQueue() {
+export async function getMailQueue(scope?: AgencyReadScope) {
   await ensureDb();
 
   try {
-    return await buildMailQueueSnapshotInternal();
+    return await buildMailQueueSnapshotInternal(scope);
   } catch (error) {
     throw new ServiceError(503, getErrorMessage(error, "Không đọc được MongoDB"), { data: [] });
   }

@@ -8,6 +8,8 @@ declare module "express-serve-static-core" {
     fujiUserEmail?: string;
     /** Họ tên UTF-8 (header `x-fuji-user-display-name-b64`, base64url). */
     fujiUserDisplayName?: string;
+    /** Scope đại lý cho user CUSTOMER (header `x-fuji-agency-id`). */
+    fujiAgencyId?: string;
     fujiUserRoles?: string[];
     fujiAuthType?: string;
   }
