@@ -2,12 +2,16 @@ import { Router } from "express";
 import {
   createThuChiHandler,
   createThuChiBankCatalogHandler,
+  createThuChiSourceCatalogHandler,
   deleteThuChiBankCatalogHandler,
+  deleteThuChiSourceCatalogHandler,
   getThuChiByIdHandler,
   listThuChiHandler,
   listThuChiBankCatalogHandler,
+  listThuChiSourceCatalogHandler,
   removeThuChiHandler,
   updateThuChiBankCatalogHandler,
+  updateThuChiSourceCatalogHandler,
   updateThuChiHandler,
 } from "./accounting-thu-chi.controller";
 
@@ -18,6 +22,10 @@ router.get("/bank-catalog", listThuChiBankCatalogHandler);
 router.post("/bank-catalog", createThuChiBankCatalogHandler);
 router.patch("/bank-catalog/:id", updateThuChiBankCatalogHandler);
 router.delete("/bank-catalog/:id", deleteThuChiBankCatalogHandler);
+router.get("/source-catalog", listThuChiSourceCatalogHandler);
+router.post("/source-catalog", createThuChiSourceCatalogHandler);
+router.patch("/source-catalog/:id", updateThuChiSourceCatalogHandler);
+router.delete("/source-catalog/:id", deleteThuChiSourceCatalogHandler);
 router.get("/:id", getThuChiByIdHandler);
 router.post("/", createThuChiHandler);
 router.patch("/:id", updateThuChiHandler);

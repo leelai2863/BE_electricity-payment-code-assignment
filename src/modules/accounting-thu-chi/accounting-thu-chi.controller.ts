@@ -4,13 +4,17 @@ import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   createThuChi,
   createThuChiBankCatalog,
+  createThuChiSourceCatalog,
   deleteThuChiBankCatalog,
+  deleteThuChiSourceCatalog,
   getThuChiById,
   listThuChi,
   listThuChiBankCatalog,
+  listThuChiSourceCatalog,
   removeThuChi,
   updateThuChi,
   updateThuChiBankCatalog,
+  updateThuChiSourceCatalog,
 } from "./accounting-thu-chi.service";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
@@ -230,5 +234,85 @@ export async function deleteThuChiBankCatalogHandler(req: Request, res: Response
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không xóa được ngân hàng");
+  }
+}
+
+export async function listThuChiSourceCatalogHandler(req: Request, res: Response) {
+  try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem danh mục nguồn ngoài thu chi." });
+      return;
+    }
+    const result = await listThuChiSourceCatalog(req.query as Record<string, unknown>);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không đọc được danh mục nguồn ngoài");
+  }
+}
+
+export async function createThuChiSourceCatalogHandler(req: Request, res: Response) {
+  try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục nguồn ngoài." });
+      return;
+    }
+    const result = await createThuChiSourceCatalog((req.body ?? {}) as Record<string, unknown>);
+    res.status(201).json(result);
+  } catch (error) {
+    handleError(res, error, "Không tạo được nguồn ngoài");
+  }
+}
+
+export async function updateThuChiSourceCatalogHandler(req: Request, res: Response) {
+  try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục nguồn ngoài." });
+      return;
+    }
+    const result = await updateThuChiSourceCatalog(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không cập nhật được nguồn ngoài");
+  }
+}
+
+export async function deleteThuChiSourceCatalogHandler(req: Request, res: Response) {
+  try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục nguồn ngoài." });
+      return;
+    }
+    const result = await deleteThuChiSourceCatalog(String(req.params.id));
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không xóa được nguồn ngoài");
   }
 }

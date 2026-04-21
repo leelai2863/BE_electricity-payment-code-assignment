@@ -16,6 +16,12 @@ import {
   updateBankCatalogById,
   upsertBankCatalog,
 } from "@/modules/accounting-thu-chi/user-bank-preference.repository";
+import {
+  deleteSourceCatalogById,
+  listSourceCatalog,
+  updateSourceCatalogById,
+  upsertSourceCatalog,
+} from "@/modules/accounting-thu-chi/user-source-preference.repository";
 
 /** Tạo mới: bỏ trống → null; giá trị không phải số hợp lệ → 400 */
 function parseMoneyCreate(raw: unknown, fieldLabel: string): number | null {
@@ -186,6 +192,9 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
   assertPositiveThuOrChi(thu ?? 0, chi ?? 0);
 
   const link = await resolveAgencyLinkForSource(source);
+  if (!link.linkedAgencyId && source.trim()) {
+    await upsertSourceCatalog(source.trim());
+  }
 
   try {
     const doc = await createAccountingThuChiDoc({
@@ -279,6 +288,9 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
   patch.linkedAgencyId = link.linkedAgencyId;
   patch.linkedAgencyCode = link.linkedAgencyCode;
   patch.linkedAgencyName = link.linkedAgencyName;
+  if (!link.linkedAgencyId && sourceForLink.trim()) {
+    await upsertSourceCatalog(sourceForLink.trim());
+  }
 
   try {
     const updated = await updateAccountingThuChiDoc(id, patch as Parameters<typeof updateAccountingThuChiDoc>[1]);
@@ -385,5 +397,53 @@ export async function deleteThuChiBankCatalog(id: string) {
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   const ok = await deleteBankCatalogById(id);
   if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng");
+  return { ok: true, source: "mongodb" as const };
+}
+
+export async function listThuChiSourceCatalog(query: Record<string, unknown>) {
+  await ensureDb();
+  const q = typeof query.q === "string" ? query.q.trim() : "";
+  const limit = Math.min(50, toPositiveInt(query.limit, 30));
+  try {
+    const items = await listSourceCatalog({ q, limit });
+    return {
+      data: {
+        items: items.map((it) => ({
+          _id: String(it._id),
+          source: it.sourceDisplay,
+          usageCount: Number(it.usageCount ?? 0),
+          lastUsedAt: it.lastUsedAt instanceof Date ? it.lastUsedAt.toISOString() : new Date().toISOString(),
+        })),
+      },
+      source: "mongodb" as const,
+    };
+  } catch (error) {
+    throw new ServiceError(503, getErrorMessage(error, "Không đọc được danh mục nguồn ngoài"), { data: { items: [] } });
+  }
+}
+
+export async function createThuChiSourceCatalog(body: Record<string, unknown>) {
+  await ensureDb();
+  const source = typeof body.source === "string" ? body.source.trim() : "";
+  if (!source) throw new ServiceError(400, "source không hợp lệ");
+  await upsertSourceCatalog(source);
+  return { ok: true, source: "mongodb" as const };
+}
+
+export async function updateThuChiSourceCatalog(id: string, body: Record<string, unknown>) {
+  await ensureDb();
+  if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const source = typeof body.source === "string" ? body.source.trim() : "";
+  if (!source) throw new ServiceError(400, "source không hợp lệ");
+  const ok = await updateSourceCatalogById(id, source);
+  if (!ok) throw new ServiceError(404, "Không tìm thấy nguồn ngoài");
+  return { ok: true, source: "mongodb" as const };
+}
+
+export async function deleteThuChiSourceCatalog(id: string) {
+  await ensureDb();
+  if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const ok = await deleteSourceCatalogById(id);
+  if (!ok) throw new ServiceError(404, "Không tìm thấy nguồn ngoài");
   return { ok: true, source: "mongodb" as const };
 }
