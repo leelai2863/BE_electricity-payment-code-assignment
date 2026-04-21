@@ -1,16 +1,7 @@
 import type { MailQueueLineDto, RefundLineStateDto } from "@/types/electric-bill";
-import { allocateProportionalInt } from "@/lib/allocate-proportional";
 import { normalizeTextKey } from "@/lib/refund-fee-resolve";
 import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
 import type { AccountingThuChiLean } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
-
-/** Trọng số phân bổ ~ cột Hoàn (số tiền − thành phí) trên UI hoàn tiền */
-function hoanWeight(amount: number | null, phiPct: number | null): number {
-  if (amount == null || amount <= 0) return 0;
-  const pct = phiPct != null && Number.isFinite(phiPct) ? phiPct : 0;
-  const fee = Math.round((amount * pct) / 100);
-  return Math.max(0, Math.trunc(amount - fee));
-}
 
 function lineKey(billId: string, ky: number) {
   return `${billId}_k${ky}`;
@@ -65,7 +56,8 @@ export function mergeThuChiAllocationsIntoRefundStates(
     s.daHoanTotal = s.daHoan;
   }
 
-  const chiByAgencyDate = new Map<string, number>();
+  /** Danh sách từng dòng Chi theo agency + dd/mm để gán 1-1 xuống bảng Hoàn tiền. */
+  const chiRowsByAgencyDate = new Map<string, number[]>();
   for (const e of chiEntries) {
     const idStr = e.linkedAgencyId ? String(e.linkedAgencyId) : "";
     const nameFromDb = idStr ? (agencyCurrentNameById.get(idStr) ?? "").trim() : "";
@@ -76,7 +68,9 @@ export function mergeThuChiAllocationsIntoRefundStates(
     const key = `${normalizeTextKey(name)}__${dateKey}`;
     const c = typeof e.chi === "number" ? Math.trunc(e.chi) : 0;
     if (c <= 0) continue;
-    chiByAgencyDate.set(key, (chiByAgencyDate.get(key) ?? 0) + c);
+    const arr = chiRowsByAgencyDate.get(key) ?? [];
+    arr.push(c);
+    chiRowsByAgencyDate.set(key, arr);
   }
 
   const lineIndicesByAgencyDate = new Map<string, number[]>();
@@ -91,21 +85,31 @@ export function mergeThuChiAllocationsIntoRefundStates(
     lineIndicesByAgencyDate.set(key, arr);
   }
 
-  for (const [agencyDateKey, totalChi] of chiByAgencyDate) {
+  for (const [agencyDateKey, chiRows] of chiRowsByAgencyDate) {
     const indices = lineIndicesByAgencyDate.get(agencyDateKey) ?? [];
-    if (indices.length === 0 || totalChi <= 0) continue;
-    const weights = indices.map((idx) => {
-      const st = resolvedLineStates[idx];
-      const line = lineByKey.get(lineKey(st.billId, st.ky));
-      return hoanWeight(line?.amount ?? null, line?.resolvedPhiPct ?? null);
-    });
-    const parts = allocateProportionalInt(totalChi, weights);
+    if (indices.length === 0 || chiRows.length === 0) continue;
+
+    // Không phân bổ theo trọng số nữa: hiển thị theo từng dòng Chi đã nhập ở Thu chi (agency + ngày).
     for (let j = 0; j < indices.length; j++) {
       const idx = indices[j];
-      const add = parts[j] ?? 0;
+      const add = chiRows[j] ?? 0;
       const cur = resolvedLineStates[idx];
       cur.daHoanFromThuChi = add;
       cur.daHoanTotal = cur.daHoan + add;
+    }
+
+    // Nếu số dòng Chi > số dòng hoàn tiền cùng ngày, dồn phần dư vào dòng cuối để không thất thoát tổng.
+    if (chiRows.length > indices.length) {
+      const tail = indices[indices.length - 1];
+      if (tail !== undefined) {
+        let overflow = 0;
+        for (let k = indices.length; k < chiRows.length; k++) overflow += chiRows[k] ?? 0;
+        if (overflow > 0) {
+          const cur = resolvedLineStates[tail];
+          cur.daHoanFromThuChi = (cur.daHoanFromThuChi ?? 0) + overflow;
+          cur.daHoanTotal = cur.daHoan + (cur.daHoanFromThuChi ?? 0);
+        }
+      }
     }
   }
 }
