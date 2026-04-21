@@ -91,10 +91,7 @@ export function buildPaymentDueRegionCandidates(
     }
   }
 
-  if (out.length === 0) {
-    push("EVN_CPC");
-    push("EVN_NPC");
-    push("EVN_HANOI");
-  }
+  // Không fallback "thử cả 3 miền" để tránh spam sai miền (404 hàng loạt) trong production.
+  // Nếu không suy ra được miền từ `evn` và prefix mã KH, caller phải xử lý như lỗi định tuyến dữ liệu.
   return out;
 }

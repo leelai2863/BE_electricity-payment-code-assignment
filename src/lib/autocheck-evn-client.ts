@@ -220,3 +220,132 @@ export async function autocheckPollTaskUntilTerminal(
   }
   return { ok: false, message: `Hết thời gian chờ task ${taskId} (${cfg.taskPollMaxMs}ms).` };
 }
+
+type EnsureBillQueuedResponse = {
+  outcome?: string;
+  taskId?: string;
+  status?: string;
+  agentMessage?: string;
+  error?: string;
+  code?: string;
+};
+
+type EnsureBillCacheResponse = {
+  outcome?: string;
+  agentMessage?: string;
+};
+
+function isQueuedEnsureOutcome(outcome: string | undefined): boolean {
+  return outcome === "queued" || outcome === "already_queued";
+}
+
+async function postEnsureBill(
+  cfg: AutocheckEvnClientConfig,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: true; outcome: "cache_hit" | "queued" | "already_queued"; taskId?: string } | { ok: false; message: string }> {
+  if (!cfg.baseUrl) {
+    return { ok: false, message: "Chưa cấu hình AUTOCHECK_EVN_URL." };
+  }
+  const url = `${cfg.baseUrl}${path}`;
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: { ...authHeaders(cfg), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      cfg.httpTimeoutMs,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, message: msg.includes("abort") ? "Timeout gọi ensure-bill AutoCheckEvn." : msg };
+  }
+
+  const text = await res.text();
+  let parsed: EnsureBillQueuedResponse | EnsureBillCacheResponse | null = null;
+  try {
+    parsed = JSON.parse(text) as EnsureBillQueuedResponse | EnsureBillCacheResponse;
+  } catch {
+    parsed = null;
+  }
+
+  if (!res.ok) {
+    const msg =
+      (parsed as EnsureBillQueuedResponse | null)?.error ??
+      (parsed as EnsureBillQueuedResponse | null)?.agentMessage ??
+      text.slice(0, 500);
+    return { ok: false, message: msg };
+  }
+
+  const outcome = String((parsed as EnsureBillQueuedResponse | null)?.outcome ?? "");
+  if (outcome === "cache_hit") {
+    return { ok: true, outcome: "cache_hit" };
+  }
+  if (isQueuedEnsureOutcome(outcome)) {
+    const taskId = (parsed as EnsureBillQueuedResponse | null)?.taskId;
+    if (!taskId) {
+      return { ok: false, message: "ensure-bill trả queued nhưng thiếu taskId." };
+    }
+    return { ok: true, outcome: outcome as "queued" | "already_queued", taskId };
+  }
+  return {
+    ok: false,
+    message:
+      (parsed as EnsureBillQueuedResponse | null)?.agentMessage ??
+      "ensure-bill trả outcome không hợp lệ.",
+  };
+}
+
+async function waitEnsureTaskIfNeeded(
+  cfg: AutocheckEvnClientConfig,
+  ensure: { ok: true; outcome: "cache_hit" | "queued" | "already_queued"; taskId?: string } | { ok: false; message: string },
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  if (!ensure.ok) return ensure;
+  if (ensure.outcome === "cache_hit") {
+    return { ok: true, message: "ensure-bill cache_hit" };
+  }
+  const taskId = ensure.taskId;
+  if (!taskId) return { ok: false, message: "Thiếu taskId để poll ensure-bill." };
+  const polled = await autocheckPollTaskUntilTerminal(cfg, taskId);
+  if (!polled.ok) {
+    return { ok: false, message: `Poll ensure-bill thất bại: ${polled.message}` };
+  }
+  if (polled.status !== "SUCCESS") {
+    return {
+      ok: false,
+      message: `Task ensure-bill kết thúc ${polled.status}${polled.errorMessage ? `: ${polled.errorMessage}` : ""}`,
+    };
+  }
+  return { ok: true, message: `ensure-bill task ${taskId} SUCCESS` };
+}
+
+export async function autocheckEnsureNpcBillAndWait(
+  cfg: AutocheckEvnClientConfig,
+  params: { maKhachHang: string; ky: number; thang: number; nam: number },
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const ensure = await postEnsureBill(cfg, "/api/npc/ensure-bill", {
+    maKhachHang: params.maKhachHang,
+    ky: params.ky,
+    thang: params.thang,
+    nam: params.nam,
+    source: "assign-refu-payment-deadline-sync",
+  });
+  return waitEnsureTaskIfNeeded(cfg, ensure);
+}
+
+export async function autocheckEnsureHanoiBillAndWait(
+  cfg: AutocheckEvnClientConfig,
+  params: { maKhachHang: string; ky: number; thang: number; nam: number },
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const ensure = await postEnsureBill(cfg, "/api/hanoi/ensure-bill", {
+    maKhachHang: params.maKhachHang,
+    ky: params.ky,
+    thang: params.thang,
+    nam: params.nam,
+    source: "assign-refu-payment-deadline-sync",
+  });
+  return waitEnsureTaskIfNeeded(cfg, ensure);
+}

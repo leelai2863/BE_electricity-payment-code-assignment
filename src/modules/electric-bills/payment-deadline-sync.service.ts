@@ -3,6 +3,8 @@ import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import { ElectricBillRecord } from "@/models/ElectricBillRecord";
 import {
   autocheckGetPaymentDue,
+  autocheckEnsureHanoiBillAndWait,
+  autocheckEnsureNpcBillAndWait,
   readAutocheckEvnClientConfig,
   type AutocheckEvnClientConfig,
 } from "@/lib/autocheck-evn-client";
@@ -49,6 +51,37 @@ function minEnqueueGapMs(force: boolean): number {
 
 /** POST không truyền billIds (quét toàn bộ chờ giao) — hạn chế tần suất. */
 let lastEmptyBillIdsBulkAt = 0;
+
+type BackfillResult = { attempted: boolean; ok: boolean; message: string };
+type BackfillInflight = Promise<BackfillResult>;
+const backfillDebounceCache = new Map<string, { expiresAt: number; value: BackfillResult }>();
+const backfillInFlight = new Map<string, BackfillInflight>();
+
+function backfillDebounceTtlMs(): number {
+  const n = Number(process.env.PAYMENT_DEADLINE_BACKFILL_DEBOUNCE_TTL_MS ?? 180_000);
+  if (!Number.isFinite(n)) return 180_000;
+  return Math.min(300_000, Math.max(120_000, Math.round(n)));
+}
+
+function backfillRetryDelayMs(): number {
+  const n = Number(process.env.PAYMENT_DEADLINE_BACKFILL_RETRY_DELAY_MS ?? 1500);
+  if (!Number.isFinite(n)) return 1500;
+  return Math.min(15_000, Math.max(300, Math.round(n)));
+}
+
+function backfillKey(
+  region: AutocheckRegionScope,
+  maKhachHang: string,
+  ky: 1 | 2 | 3,
+  thang: number,
+  nam: number,
+): string {
+  return `${region}|${maKhachHang.trim().toUpperCase()}|${ky}|${thang}|${nam}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function emptyBillIdsBulkCooldownMs(): number {
   return Math.max(
@@ -320,6 +353,86 @@ async function resolvePaymentDueWithPastKyEscalation(
   return { ok: true, hanThanhToanIso: best.hanThanhToanIso, ky: best.ky };
 }
 
+/**
+ * Khi payment-due 404 do DB AutoCheck chưa có hóa đơn kỳ yêu cầu:
+ * - EVN_NPC/EVN_HANOI: gọi ensure-bill để worker đăng nhập + lấy dữ liệu, đợi task xong.
+ * - EVN_CPC: không auto-trigger ở đây (tránh quét diện rộng theo kỳ gây tải lớn ngoài ý muốn).
+ */
+async function triggerAutocheckBackfillForMissingPeriodRaw(
+  cfg: AutocheckEvnClientConfig,
+  region: AutocheckRegionScope,
+  maKhachHang: string,
+  ky: 1 | 2 | 3,
+  thang: number,
+  nam: number,
+): Promise<{ attempted: boolean; ok: boolean; message: string }> {
+  if (region === "EVN_NPC") {
+    let r = await autocheckEnsureNpcBillAndWait(cfg, { maKhachHang, ky, thang, nam });
+    if (!r.ok) {
+      await sleep(backfillRetryDelayMs());
+      const r2 = await autocheckEnsureNpcBillAndWait(cfg, { maKhachHang, ky, thang, nam });
+      r = r2.ok
+        ? r2
+        : {
+            ok: false as const,
+            message: `${r.message}; retry_once_failed: ${r2.message}`,
+          };
+    }
+    return { attempted: true, ok: r.ok, message: r.message };
+  }
+  if (region === "EVN_HANOI") {
+    let r = await autocheckEnsureHanoiBillAndWait(cfg, { maKhachHang, ky, thang, nam });
+    if (!r.ok) {
+      await sleep(backfillRetryDelayMs());
+      const r2 = await autocheckEnsureHanoiBillAndWait(cfg, { maKhachHang, ky, thang, nam });
+      r = r2.ok
+        ? r2
+        : {
+            ok: false as const,
+            message: `${r.message}; retry_once_failed: ${r2.message}`,
+          };
+    }
+    return { attempted: true, ok: r.ok, message: r.message };
+  }
+  return {
+    attempted: false,
+    ok: false,
+    message: "Bỏ qua auto-backfill CPC trong luồng đồng bộ hạn TT (không có ensure-bill theo mã KH).",
+  };
+}
+
+async function triggerAutocheckBackfillForMissingPeriod(
+  cfg: AutocheckEvnClientConfig,
+  region: AutocheckRegionScope,
+  maKhachHang: string,
+  ky: 1 | 2 | 3,
+  thang: number,
+  nam: number,
+): Promise<BackfillResult> {
+  const key = backfillKey(region, maKhachHang, ky, thang, nam);
+  const now = Date.now();
+  const cached = backfillDebounceCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const inFlight = backfillInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
+  }
+  const p = triggerAutocheckBackfillForMissingPeriodRaw(cfg, region, maKhachHang, ky, thang, nam);
+  backfillInFlight.set(key, p);
+  try {
+    const result = await p;
+    backfillDebounceCache.set(key, {
+      expiresAt: Date.now() + backfillDebounceTtlMs(),
+      value: result,
+    });
+    return result;
+  } finally {
+    backfillInFlight.delete(key);
+  }
+}
+
 function applyPeriodSyncFields(
   periods: ElectricBillPeriod[],
   ky: 1 | 2 | 3,
@@ -531,12 +644,18 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
     }
 
     const regions = buildPaymentDueRegionCandidates(bill.customerCode, bill.evn);
+    if (regions.length === 0) {
+      const routeMsg = `Không xác định được miền EVN cho mã "${bill.customerCode}" (evn="${bill.evn ?? ""}"). Bỏ qua gọi payment-due để tránh request sai miền.`;
+      next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "error", routeMsg));
+      await saveBillPeriods(job.billId, next);
+      return;
+    }
     const tried: string[] = [];
     let lastMessage = "";
 
     for (const region of regions) {
       tried.push(region);
-      const resolved = await resolvePaymentDueWithPastKyEscalation(
+      let resolved = await resolvePaymentDueWithPastKyEscalation(
         cfg,
         bill,
         region as AutocheckRegionScope,
@@ -584,6 +703,78 @@ async function runOneJob(job: PaymentDeadlineSyncJob): Promise<void> {
         } as Record<string, string | null | undefined>);
         await saveBillPeriods(job.billId, next);
         return;
+      }
+      if (resolved.status === 404) {
+        const backfill = await triggerAutocheckBackfillForMissingPeriod(
+          cfg,
+          region as AutocheckRegionScope,
+          bill.customerCode,
+          job.ky,
+          billThang,
+          billNam,
+        );
+        if (backfill.attempted) {
+          if (!backfill.ok) {
+            lastMessage = `${region}: ${resolved.message}; auto-backfill thất bại: ${backfill.message}`;
+            continue;
+          }
+          // Sau khi worker backfill xong, thử lại payment-due ngay trong cùng vòng xử lý.
+          resolved = await resolvePaymentDueWithPastKyEscalation(
+            cfg,
+            bill,
+            region as AutocheckRegionScope,
+            job.ky,
+            billThang,
+            billNam,
+            { allowAssignedStartKy: Boolean(job.allowAssignedKy) },
+          );
+          if (resolved.ok) {
+            const finalKy = resolved.ky;
+            const slotFinalBefore = next.find((p) => p.ky === finalKy);
+            if (
+              slotFinalBefore &&
+              (slotFinalBefore.amount == null || !Number.isFinite(slotFinalBefore.amount))
+            ) {
+              const srcKy = pickSourceKyForRelocateToFinalKy(next, job.ky, finalKy);
+              if (srcKy != null && srcKy !== finalKy) {
+                next = relocateUnassignedBillingSourceKyToTargetKy(next, srcKy, finalKy);
+              }
+            }
+            const periodFinal = next.find((p) => p.ky === finalKy);
+            const amtFinal = amountForFinalKy(job, period, finalKy, periodFinal, amt);
+            if (amtFinal == null) {
+              lastMessage = `${region}: thiếu số tiền kỳ ${finalKy} sau auto-backfill`;
+              continue;
+            }
+            const syncKeyFinal = computeSyncFingerprint(billNam, billThang, finalKy, amtFinal);
+            if (finalKy !== job.ky) {
+              next = applyPeriodSyncFields(next, job.ky, {
+                paymentDeadline: null,
+                evnPaymentDeadlineSyncStatus: null,
+                evnPaymentDeadlineSyncError: null,
+                evnPaymentDeadlineSyncedAt: null,
+                evnPaymentDeadlineSyncKey: null,
+              } as Record<string, string | null | undefined>);
+            }
+            next = applyPeriodSyncFields(next, finalKy, {
+              paymentDeadline: resolved.hanThanhToanIso,
+              evnPaymentDeadlineSyncStatus: "ok",
+              evnPaymentDeadlineSyncError: null,
+              evnPaymentDeadlineSyncedAt: new Date().toISOString(),
+              evnPaymentDeadlineSyncKey: syncKeyFinal,
+            } as Record<string, string | null | undefined>);
+            await saveBillPeriods(job.billId, next);
+            return;
+          }
+          if (resolved.status !== 404) {
+            const failMsg = `${region}: payment-due sau auto-backfill lỗi ${resolved.message}${resolved.code ? ` (${resolved.code})` : ""}`;
+            next = applyPeriodSyncFields(next, job.ky, failureSyncPatch(job, snapshotForRevert, "error", failMsg));
+            await saveBillPeriods(job.billId, next);
+            return;
+          }
+          lastMessage = `${region}: sau auto-backfill vẫn không có payment-due`;
+          continue;
+        }
       }
       lastMessage = `${region}: ${resolved.message}${resolved.code ? ` (${resolved.code})` : ""}`;
       if (resolved.status !== 404) {
