@@ -19,4 +19,5 @@ export type AuditAction =
   | "accounting.thu_chi_create"
   | "accounting.thu_chi_update"
   | "accounting.thu_chi_delete"
-  | "electric.refund_line_patch";
+  | "electric.refund_line_patch"
+  | "electric.data_export";

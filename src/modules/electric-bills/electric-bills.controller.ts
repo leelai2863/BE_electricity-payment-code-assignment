@@ -22,6 +22,7 @@ import {
   assignAgency,
   patchElectricBill,
   createManualElectricBill,
+  recordDataExportAudit,
 } from "./electric-bills.service";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
@@ -35,6 +36,35 @@ function handleError(res: Response, error: unknown, fallbackMessage: string) {
 
   const message = error instanceof Error ? error.message : fallbackMessage;
   res.status(500).json({ error: message });
+}
+
+export async function postDataExportAuditHandler(req: Request, res: Response) {
+  try {
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const exportKind = typeof body.exportKind === "string" ? body.exportKind.trim() : "";
+    if (!exportKind) {
+      res.status(400).json({ error: "exportKind là bắt buộc" });
+      return;
+    }
+    if (!body.actorUserId) {
+      res.status(401).json({ error: "Thiếu định danh người dùng" });
+      return;
+    }
+    const meta =
+      body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
+        : {};
+    await recordDataExportAudit({
+      actorUserId: String(body.actorUserId),
+      exportKind,
+      metadata: meta,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error, "Không ghi nhận audit xuất dữ liệu");
+  }
 }
 
 export async function getUnassignedHandler(req: Request, res: Response) {

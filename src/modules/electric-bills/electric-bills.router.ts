@@ -16,10 +16,12 @@ import {
   assignAgencyHandler,
   patchElectricBillHandler,
   createManualElectricBillHandler,
+  postDataExportAuditHandler,
 } from "./electric-bills.controller";
 
 const router = Router();
 
+router.post("/audit/data-export", postDataExportAuditHandler);
 router.get("/unassigned", getUnassignedHandler);
 router.post("/unassigned/payment-deadline-sync", postUnassignedPaymentDeadlineSyncHandler);
 router.get("/invoice-list", getInvoiceListHandler);

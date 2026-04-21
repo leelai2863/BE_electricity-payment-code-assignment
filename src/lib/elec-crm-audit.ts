@@ -28,6 +28,7 @@ function auditActionForCentral(mongoAction: AuditAction): string {
     "accounting.thu_chi_update": "elec.accounting.thu_chi_update",
     "accounting.thu_chi_delete": "elec.accounting.thu_chi_delete",
     "electric.refund_line_patch": "elec.refund.line_patch",
+    "electric.data_export": "elec.data_export",
   };
   return map[mongoAction] ?? `elec.${mongoAction}`;
 }
@@ -113,6 +114,12 @@ function buildViSummary(
     case "accounting.thu_chi_delete": {
       const id = String(m.entryId ?? "").trim();
       return `Kế toán — xóa dòng thu chi${id ? ` (${id})` : ""}.`;
+    }
+    case "electric.data_export": {
+      const kind = String(m.export_kind ?? m.exportKind ?? "").trim();
+      const hint = String(m.filename ?? m.label ?? "").trim();
+      const extra = [kind && `loại «${kind}»`, hint && `tệp ${hint}`].filter(Boolean).join(", ");
+      return extra ? `Xuất dữ liệu (${extra}).` : "Xuất dữ liệu (Excel / tệp).";
     }
     case "electric.refund_line_patch": {
       const mkh = String(m.customerCode ?? "").trim();

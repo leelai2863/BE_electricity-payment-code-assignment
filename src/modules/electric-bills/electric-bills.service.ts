@@ -90,6 +90,36 @@ async function checkAssignedCodeConflict(
 
 export { ServiceError };
 
+/** Ghi nhận người dùng đã xuất tệp (Excel/CSV) — CRM gọi sau khi tạo tệp cục bộ thành công. */
+export async function recordDataExportAudit(params: {
+  actorUserId: string;
+  exportKind: string;
+  metadata?: Record<string, unknown>;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<void> {
+  const id = String(params.actorUserId ?? "").trim();
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ServiceError(400, "actorUserId không hợp lệ");
+  }
+  const kind = params.exportKind.trim();
+  if (!kind) {
+    throw new ServiceError(400, "exportKind là bắt buộc");
+  }
+  await writeAuditLog({
+    actorUserId: id,
+    action: "electric.data_export",
+    entityType: "data_export",
+    entityId: id,
+    metadata: {
+      export_kind: kind,
+      ...(params.metadata ?? {}),
+    },
+    ip: params.ip ?? null,
+    userAgent: params.userAgent ?? null,
+  });
+}
+
 function omitEvnField<T extends { evn?: unknown }>(row: T): Omit<T, "evn"> {
   const { evn: _evn, ...rest } = row;
   return rest;
