@@ -8,7 +8,7 @@ const RefundFeeRuleSchema = new Schema(
     pct: { type: Number, required: true },
     conditionType: {
       type: String,
-      enum: ["amount", "cardType", "manual"],
+      enum: ["amount", "cardType", "manual", "fixed", "advance", "wait"],
       default: "manual",
       index: true,
     },

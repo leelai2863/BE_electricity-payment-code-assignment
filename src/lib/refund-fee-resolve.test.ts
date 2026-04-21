@@ -89,5 +89,25 @@ describe("resolveRefundRuleFromRules", () => {
     expect(found?.statusLabel).toBe("TREN 100");
     expect(found?.pct).toBe(1.1);
   });
+
+  it("rule CỐ ĐỊNH (fixed) vẫn khớp mà không cần khoảng số tiền", () => {
+    const rules: RefundFeeRuleDto[] = [
+      mkRule({
+        conditionType: "fixed",
+        statusLabel: "CO DINH",
+        pct: 0.88,
+      }),
+    ];
+    const found = resolveRefundRuleFromRules(
+      rules,
+      "1. A NAM",
+      50_000_000,
+      null,
+      new Date("2026-04-17T00:00:00.000Z")
+    );
+    expect(found?.conditionType).toBe("fixed");
+    expect(found?.statusLabel).toBe("CO DINH");
+    expect(found?.pct).toBe(0.88);
+  });
 });
 

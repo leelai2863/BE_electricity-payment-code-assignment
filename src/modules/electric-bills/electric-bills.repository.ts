@@ -104,7 +104,7 @@ export async function createRefundFeeRuleDoc(data: {
   agencyName: string;
   feeName?: string;
   statusLabel: string;
-  conditionType?: "amount" | "cardType" | "manual";
+  conditionType?: "amount" | "cardType" | "manual" | "fixed" | "advance" | "wait";
   amountMin?: number | null;
   amountMax?: number | null;
   cardType?: string | null;
@@ -125,7 +125,7 @@ export async function updateRefundFeeRuleById(
   data: {
     feeName?: string;
     statusLabel?: string;
-    conditionType?: "amount" | "cardType" | "manual";
+    conditionType?: "amount" | "cardType" | "manual" | "fixed" | "advance" | "wait";
     amountMin?: number | null;
     amountMax?: number | null;
     cardType?: string | null;

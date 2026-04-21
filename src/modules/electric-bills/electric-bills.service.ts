@@ -10,6 +10,7 @@ import {
   resolveRefundFeePctFromRulesByStatus,
 } from "@/lib/refund-fee-resolve";
 import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
+import { isUserDrivenRefundCondition, normalizeRefundFeeConditionInput } from "@/lib/refund-fee-condition";
 import type {
   ElectricBillPeriod,
   MailQueueLineDto,
@@ -341,7 +342,7 @@ async function buildMailQueueSnapshotInternal(): Promise<{
   for (const line of lines) {
     const agencyName = (line.assignedAgencyName ?? "").trim() || "(Chưa có đại lý)";
     const agencyRules = feeRules.filter((r) => r.agencyName.trim().toUpperCase() === agencyName.trim().toUpperCase());
-    const hasManualRule = agencyRules.some((r) => r.isActive && r.conditionType === "manual");
+    const hasManualRule = agencyRules.some((r) => r.isActive && isUserDrivenRefundCondition(r.conditionType));
     const resolved = await resolveRefundRuleFromLine(agencyName, {
       year: line.year,
       month: line.month,
@@ -427,7 +428,7 @@ export async function createRefundFeeRule(body: {
   agencyName?: string;
   feeName?: string;
   statusLabel?: string;
-  conditionType?: "amount" | "cardType" | "manual";
+  conditionType?: RefundFeeRuleDto["conditionType"];
   amountMin?: number | null;
   amountMax?: number | null;
   cardType?: string | null;
@@ -439,10 +440,7 @@ export async function createRefundFeeRule(body: {
   const agencyName = typeof body.agencyName === "string" ? body.agencyName.trim() : "";
   const feeName = typeof body.feeName === "string" ? body.feeName.trim() : "";
   const statusLabel = typeof body.statusLabel === "string" ? body.statusLabel.trim().toUpperCase() : "";
-  const conditionType =
-    body.conditionType === "amount" || body.conditionType === "cardType" || body.conditionType === "manual"
-      ? body.conditionType
-      : "manual";
+  const conditionType = normalizeRefundFeeConditionInput(body.conditionType, "manual");
   const amountMin =
     body.amountMin === null || body.amountMin === undefined ? null : Number(body.amountMin);
   const amountMax =
@@ -535,7 +533,7 @@ export async function updateRefundFeeRule(
   body: {
     feeName?: string;
     statusLabel?: string;
-    conditionType?: "amount" | "cardType" | "manual";
+    conditionType?: RefundFeeRuleDto["conditionType"];
     amountMin?: number | null;
     amountMax?: number | null;
     cardType?: string | null;
@@ -550,10 +548,11 @@ export async function updateRefundFeeRule(
   const existing = await findRefundFeeRuleById(id);
   if (!existing) throw new ServiceError(404, "Không tìm thấy rule phí");
 
+  const existingCt = normalizeRefundFeeConditionInput(existing.conditionType, "manual");
   const conditionType =
-    body.conditionType === "amount" || body.conditionType === "cardType" || body.conditionType === "manual"
-      ? body.conditionType
-      : (existing.conditionType as "amount" | "cardType" | "manual");
+    body.conditionType !== undefined
+      ? normalizeRefundFeeConditionInput(body.conditionType, existingCt)
+      : existingCt;
   const amountMin =
     body.amountMin === undefined ? existing.amountMin ?? null : body.amountMin == null ? null : Number(body.amountMin);
   const amountMax =
@@ -758,7 +757,7 @@ export async function patchRefundLineStates(
       const hasManualRule = feeRules.some(
         (r) =>
           r.isActive &&
-          r.conditionType === "manual" &&
+          isUserDrivenRefundCondition(r.conditionType) &&
           r.agencyName.trim().toUpperCase() === agencyName.trim().toUpperCase()
       );
       let newStatus = "";

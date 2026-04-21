@@ -1,5 +1,6 @@
 import { RefundFeeRule } from "@/models/RefundFeeRule";
 import { refundAnchorDateUtc, type MailQueueAnchorInput } from "@/lib/refund-anchor-date";
+import type { RefundFeeRuleConditionType } from "@/lib/refund-fee-condition";
 import type { RefundFeeRuleDto } from "@/types/electric-bill";
 
 export function normalizeTextKey(input: string): string {
@@ -21,12 +22,14 @@ function normalizeCardType(input: string | null | undefined): "VP" | "SACOM" | "
   return "THUONG";
 }
 
-function normalizeConditionType(
-  value: unknown
-): "amount" | "cardType" | "manual" {
+function normalizeConditionType(value: unknown): RefundFeeRuleConditionType {
   const key = normalizeTextKey(String(value ?? ""));
   if (key === "AMOUNT") return "amount";
   if (key === "CARDTYPE") return "cardType";
+  if (key === "FIXED") return "fixed";
+  if (key === "MANUAL") return "manual";
+  if (key === "ADVANCE") return "advance";
+  if (key === "WAIT") return "wait";
   return "manual";
 }
 
@@ -56,6 +59,7 @@ function matchesRuleCondition(rule: RefundFeeRuleDto, amount: number | null, car
     if (max != null && amount > max) return false;
     return true;
   }
+  // manual | fixed | advance | wait — không ràng buộc thêm theo số tiền / thẻ
   return true;
 }
 

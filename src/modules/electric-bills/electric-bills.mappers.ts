@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { normalizeRefundFeeConditionInput } from "@/lib/refund-fee-condition";
 import type { RefundFeeRuleDto, RefundLineStateDto } from "@/types/electric-bill";
 
 export function serializeRefundLineStateDoc(doc: {
@@ -27,7 +28,7 @@ export function serializeRefundFeeRuleDoc(doc: {
   agencyName: string;
   feeName?: string;
   statusLabel: string;
-  conditionType?: "amount" | "cardType" | "manual";
+  conditionType?: "amount" | "cardType" | "manual" | "fixed" | "advance" | "wait";
   amountMin?: number | null;
   amountMax?: number | null;
   cardType?: string | null;
@@ -41,7 +42,7 @@ export function serializeRefundFeeRuleDoc(doc: {
     agencyName: doc.agencyName,
     feeName: doc.feeName ?? "",
     statusLabel: doc.statusLabel,
-    conditionType: doc.conditionType ?? "manual",
+    conditionType: normalizeRefundFeeConditionInput(doc.conditionType, "manual"),
     amountMin: doc.amountMin ?? null,
     amountMax: doc.amountMax ?? null,
     cardType: doc.cardType ?? null,
