@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
 import { AccountingThuChiEntry } from "@/models/AccountingThuChiEntry";
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export type AccountingThuChiLean = {
   _id: mongoose.Types.ObjectId;
   txnDate: Date;
@@ -17,26 +21,62 @@ export type AccountingThuChiLean = {
   updatedAt?: Date;
 };
 
+export type ThuChiListQueryFlow = "all" | "thu" | "chi";
+export type ThuChiListQueryLink = "all" | "linked" | "unlinked";
+
 export async function listAccountingThuChiEntries(params: {
   from?: Date;
   to?: Date;
   agencyCode?: string;
   linkedAgencyId?: string;
+  /** Tìm trong nội dung, nguồn, ghi chú (không phân biệt hoa thường) */
+  textQ?: string;
+  /** Tên ngân hàng chứa chuỗi này */
+  bankContains?: string;
+  flow?: ThuChiListQueryFlow;
+  link?: ThuChiListQueryLink;
   skip: number;
   limit: number;
 }): Promise<{ items: AccountingThuChiLean[]; total: number }> {
-  const q: Record<string, unknown> = {};
+  const clauses: Record<string, unknown>[] = [];
   if (params.from || params.to) {
-    q.txnDate = {};
-    if (params.from) (q.txnDate as Record<string, Date>).$gte = params.from;
-    if (params.to) (q.txnDate as Record<string, Date>).$lte = params.to;
+    const txn: Record<string, Date> = {};
+    if (params.from) txn.$gte = params.from;
+    if (params.to) txn.$lte = params.to;
+    clauses.push({ txnDate: txn });
   }
   if (params.agencyCode?.trim()) {
-    q.linkedAgencyCode = params.agencyCode.trim().toUpperCase();
+    clauses.push({ linkedAgencyCode: params.agencyCode.trim().toUpperCase() });
   }
   if (params.linkedAgencyId?.trim()) {
-    q.linkedAgencyId = new mongoose.Types.ObjectId(params.linkedAgencyId.trim());
+    clauses.push({ linkedAgencyId: new mongoose.Types.ObjectId(params.linkedAgencyId.trim()) });
   }
+  if (params.flow === "thu") {
+    clauses.push({ thu: { $gt: 0 } });
+  } else if (params.flow === "chi") {
+    clauses.push({ chi: { $gt: 0 } });
+  }
+  if (params.link === "linked") {
+    clauses.push({ linkedAgencyId: { $ne: null } });
+  } else if (params.link === "unlinked") {
+    clauses.push({
+      $or: [{ linkedAgencyId: null }, { linkedAgencyId: { $exists: false } }],
+    });
+  }
+  const b = params.bankContains?.trim();
+  if (b) {
+    const rx = new RegExp(escapeRegExp(b), "i");
+    clauses.push({ bank: { $regex: rx } });
+  }
+  const tq = params.textQ?.trim();
+  if (tq) {
+    const rx = new RegExp(escapeRegExp(tq), "i");
+    clauses.push({
+      $or: [{ description: { $regex: rx } }, { source: { $regex: rx } }, { notes: { $regex: rx } }],
+    });
+  }
+
+  const q: Record<string, unknown> = clauses.length === 0 ? {} : clauses.length === 1 ? clauses[0]! : { $and: clauses };
 
   const [total, items] = await Promise.all([
     AccountingThuChiEntry.countDocuments(q),

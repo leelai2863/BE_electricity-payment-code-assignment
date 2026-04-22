@@ -8,6 +8,8 @@ import {
   deleteAccountingThuChiDoc,
   findAccountingThuChiById,
   listAccountingThuChiEntries,
+  type ThuChiListQueryFlow,
+  type ThuChiListQueryLink,
   updateAccountingThuChiDoc,
 } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 import {
@@ -108,6 +110,19 @@ export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiR
     if (from && Number.isNaN(from.getTime())) throw new ServiceError(400, "Tham số from không hợp lệ");
     if (to && Number.isNaN(to.getTime())) throw new ServiceError(400, "Tham số to không hợp lệ");
     const agencyCode = typeof query.agencyCode === "string" ? query.agencyCode.trim() : undefined;
+    const textQ = typeof query.q === "string" ? query.q : undefined;
+    const bankContains = typeof query.bank === "string" ? query.bank : undefined;
+    const flowRaw = typeof query.flow === "string" ? query.flow.trim().toLowerCase() : "";
+    const flow: ThuChiListQueryFlow = flowRaw === "thu" || flowRaw === "chi" ? flowRaw : "all";
+    if (flowRaw && flowRaw !== "thu" && flowRaw !== "chi" && flowRaw !== "all") {
+      throw new ServiceError(400, "Tham số flow phải là thu, chi hoặc all");
+    }
+    const linkRaw = typeof query.link === "string" ? query.link.trim().toLowerCase() : "";
+    const link: ThuChiListQueryLink =
+      linkRaw === "linked" || linkRaw === "unlinked" ? linkRaw : "all";
+    if (linkRaw && linkRaw !== "linked" && linkRaw !== "unlinked" && linkRaw !== "all") {
+      throw new ServiceError(400, "Tham số link phải là linked, unlinked hoặc all");
+    }
 
     const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
     if (agencyScopeId && !mongoose.isValidObjectId(agencyScopeId)) {
@@ -118,6 +133,10 @@ export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiR
       to,
       agencyCode,
       linkedAgencyId: agencyScopeId || undefined,
+      textQ: textQ?.trim() || undefined,
+      bankContains: bankContains?.trim() || undefined,
+      flow,
+      link,
       skip: (page - 1) * pageSize,
       limit: pageSize,
     });
