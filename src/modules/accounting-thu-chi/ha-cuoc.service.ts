@@ -373,7 +373,10 @@ export async function applyHaCuocAfterThuChiSaved(params: {
           amount: chi,
           paymentConfirmed: true,
           scanDdMm,
-          cccdConfirmed: false,
+          cccdConfirmed: true,
+          assignedAgencyId: null,
+          assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
+          dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
         },
         split2: {
           amount: resolved.originalAmount - chi,
@@ -385,7 +388,13 @@ export async function applyHaCuocAfterThuChiSaved(params: {
         lockedByThuChi: true,
       });
       splitId = String(entry._id);
-      await patchSplitPeriod(splitId, 1, { paymentConfirmed: true, scanDdMm });
+      await patchSplitPeriod(splitId, 1, {
+        paymentConfirmed: true,
+        scanDdMm,
+        cccdConfirmed: true,
+        assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
+        dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
+      });
       return buildHaCuocContext(resolved, chi, splitId, false);
     } catch (err) {
       if (splitId) {
