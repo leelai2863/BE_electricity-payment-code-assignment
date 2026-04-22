@@ -2034,6 +2034,7 @@ export async function createBillSplit(
       split1: entry.split1,
       split2: entry.split2,
       status: "active",
+      bill: await attachActiveSplitsToSerializedBill(serializeElectricBill(bill.toObject())),
     },
     source: "mongodb",
   };
