@@ -412,17 +412,41 @@ export async function applyHaCuocAfterThuChiSaved(params: {
   return buildHaCuocContext(resolved, chi, resolved.splitId, true);
 }
 
-export async function revertHaCuocContext(ctx: HaCuocContextLean, thuChiEntryId: string): Promise<void> {
+export type RevertHaCuocContextOptions = {
+  actorRoles?: string[] | null;
+  /**
+   * Chỉ dùng khi xóa dòng Thu chi: nếu không còn hoàn tác an toàn (split resolved / đợt 2 đã chốt),
+   * cho phép **SUPER_ADMIN** bỏ qua bước hoàn tác (vẫn xóa bản ghi sổ — cần kiểm tra mã điện tách mã tương ứng).
+   */
+  allowSuperAdminOmitWhenIrreversible?: boolean;
+};
+
+function hasSuperAdminRole(roles: unknown): boolean {
+  if (!Array.isArray(roles)) return false;
+  return roles.some((r) => String(r).trim().toUpperCase() === "SUPER_ADMIN");
+}
+
+/**
+ * @returns `true` nếu đã bỏ qua hoàn tác vì tách mã không còn hoàn tác an toàn và thao tác do SUPER_ADMIN (chỉ dùng khi xóa Thu chi).
+ */
+export async function revertHaCuocContext(
+  ctx: HaCuocContextLean,
+  thuChiEntryId: string,
+  opts?: RevertHaCuocContextOptions
+): Promise<boolean> {
+  const allowOmit = Boolean(opts?.allowSuperAdminOmitWhenIrreversible) && hasSuperAdminRole(opts?.actorRoles);
+
   const splitId = ctx.createdSplitEntryId;
-  if (!splitId || !mongoose.isValidObjectId(splitId)) return;
+  if (!splitId || !mongoose.isValidObjectId(splitId)) return false;
 
   const ent = await findSplitBillEntryById(splitId);
-  if (!ent) return;
+  if (!ent) return false;
 
   if (ent.status === "resolved") {
+    if (allowOmit) return true;
     throw new ServiceError(
       409,
-      `Split của mã ${ctx.customerCode} kỳ ${ctx.targetKy} đã hoàn tất — không thể hoàn tác Thu chi.`,
+      `Split của mã ${ctx.customerCode} kỳ ${ctx.targetKy} đã hoàn tất. Chỉ tài khoản SUPER_ADMIN mới gỡ được dòng Thu chi tại đây; các vai trò khác cần xử lý tại mã điện tách mã tương ứng.`,
       { code: "HA_CUOC_SPLIT_RESOLVED" },
     );
   }
@@ -430,12 +454,15 @@ export async function revertHaCuocContext(ctx: HaCuocContextLean, thuChiEntryId:
   if (ctx.resolvedExistingSplit) {
     const s2 = ent.split2 as { paymentConfirmed?: boolean; dealCompletedAt?: Date | null };
     if (s2?.dealCompletedAt) {
-      throw new ServiceError(409, "Kỳ tách đã hoàn tất — không thể hoàn tác Thu chi đợt 2.", {
-        code: "HA_CUOC_SPLIT_RESOLVED",
-      });
+      if (allowOmit) return true;
+      throw new ServiceError(
+        409,
+        "Kỳ tách (đợt 2) đã hoàn tất. Chỉ tài khoản SUPER_ADMIN mới gỡ được dòng Thu chi tại đây; các vai trò khác cần xử lý tại mã điện tách mã tương ứng.",
+        { code: "HA_CUOC_SPLIT_RESOLVED" },
+      );
     }
     await patchSplitPeriod(splitId, 2, { paymentConfirmed: false, scanDdMm: null });
-    return;
+    return false;
   }
 
   const others = await countOtherThuChiLinkedToSplit(splitId, thuChiEntryId);
@@ -448,6 +475,7 @@ export async function revertHaCuocContext(ctx: HaCuocContextLean, thuChiEntryId:
   }
 
   await cancelBillSplit(splitId);
+  return false;
 }
 
 export async function updateHaCuocSplitAmountsIfNeeded(params: {

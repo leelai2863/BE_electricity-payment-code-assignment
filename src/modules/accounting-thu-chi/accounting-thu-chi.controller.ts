@@ -165,8 +165,20 @@ export async function removeThuChiHandler(req: Request, res: Response) {
     }
     const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
     const labels = fujiAuditActorLabelsFromRequest(req);
+    const fromBody = body.actorRoles;
+    const fromBodyList = Array.isArray(fromBody)
+      ? (fromBody as unknown[]).filter((x): x is string => typeof x === "string")
+      : null;
+    /** Body rỗng → ưu tiên vai trò từ gateway (JWT) */
+    const actorRoles =
+      fromBodyList && fromBodyList.length > 0
+        ? fromBodyList
+        : Array.isArray(req.fujiUserRoles)
+          ? req.fujiUserRoles
+          : null;
     const result = await removeThuChi(String(req.params.id), {
       actorUserId: body.actorUserId as string | undefined,
+      actorRoles,
       ip: req.ip ?? null,
       userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
       actorEmail: labels.actorEmail,

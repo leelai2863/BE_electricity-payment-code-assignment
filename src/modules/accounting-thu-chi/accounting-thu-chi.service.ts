@@ -69,6 +69,8 @@ function assertPositiveThuOrChi(effThu: number, effChi: number) {
 
 export type ThuChiAuditContext = {
   actorUserId?: string;
+  /** Vai trò IAM (gateway) — dùng cho gỡ Thu chi Hạ cước khi split đã chốt (chỉ SUPER_ADMIN). */
+  actorRoles?: string[] | null;
   ip?: string | null;
   userAgent?: string | null;
   actorEmail?: string | null;
@@ -596,8 +598,12 @@ export async function removeThuChi(id: string, ctx?: ThuChiAuditContext) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   const snapshot = await findAccountingThuChiById(id);
+  let haCuocOmittedIrreversible = false;
   if (snapshot?.haCuocContext) {
-    await revertHaCuocContext(snapshot.haCuocContext, id);
+    haCuocOmittedIrreversible = await revertHaCuocContext(snapshot.haCuocContext, id, {
+      actorRoles: ctx?.actorRoles,
+      allowSuperAdminOmitWhenIrreversible: true,
+    });
   }
   const deleted = await deleteAccountingThuChiDoc(id);
   if (!deleted) throw new ServiceError(404, "Không tìm thấy bản ghi");
@@ -612,7 +618,12 @@ export async function removeThuChi(id: string, ctx?: ThuChiAuditContext) {
       thuVnd: snapshot?.thu ?? null,
       chiVnd: snapshot?.chi ?? null,
       linkedAgencyCode: snapshot?.linkedAgencyCode ?? null,
-      changeSummary: `Xóa dòng thu chi (nguồn «${String(snapshot?.source ?? "").trim() || "—"}», Thu/Chi đã lưu trong metadata).`,
+      haCuocOmittedIrreversible,
+      changeSummary: haCuocOmittedIrreversible
+        ? `Xóa dòng thu chi (SUPER_ADMIN: bỏ qua hoàn tác tách mã đã chốt — nguồn «${
+            String(snapshot?.source ?? "").trim() || "—"
+          }»).`
+        : `Xóa dòng thu chi (nguồn «${String(snapshot?.source ?? "").trim() || "—"}», Thu/Chi đã lưu trong metadata).`,
     },
     ip: ctx?.ip ?? null,
     userAgent: ctx?.userAgent ?? null,
