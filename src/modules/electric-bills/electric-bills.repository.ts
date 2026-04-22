@@ -372,6 +372,36 @@ export async function findActiveSplitsByBillIds(billIds: string[]) {
   return SplitBillEntry.find({ originalBillId: { $in: billIds }, status: "active" }).lean();
 }
 
+/**
+ * Tìm tất cả originalBillId có ít nhất 1 phần tách (split1/split2) thuộc đại lý khớp `agencyName`.
+ * Dùng để filter `danh sách hóa đơn` theo đại lý khi mã hạ cước chỉ mang agency ở SplitBillEntry
+ * (period cha đã bị detach agency).
+ */
+export async function findOriginalBillIdsBySplitAgencyName(
+  agencyName: string,
+  opts?: { statuses?: Array<"active" | "resolved" | "cancelled"> }
+): Promise<string[]> {
+  const name = (agencyName ?? "").trim();
+  if (!name) return [];
+  const statuses = opts?.statuses && opts.statuses.length > 0 ? opts.statuses : (["active", "resolved"] as const);
+  const regex = { $regex: escapeRegex(name), $options: "i" };
+  const rows = await SplitBillEntry.find({
+    status: { $in: statuses },
+    $or: [
+      { "split1.assignedAgencyName": regex },
+      { "split2.assignedAgencyName": regex },
+    ],
+  })
+    .select({ originalBillId: 1 })
+    .lean();
+  const ids = new Set<string>();
+  for (const r of rows) {
+    const raw = (r as { originalBillId?: unknown }).originalBillId;
+    if (raw) ids.add(String(raw));
+  }
+  return [...ids];
+}
+
 export async function findSplitBillEntryById(splitId: string) {
   if (!mongoose.isValidObjectId(splitId)) return null;
   return SplitBillEntry.findById(splitId).exec();

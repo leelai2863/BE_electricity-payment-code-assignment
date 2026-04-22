@@ -53,6 +53,7 @@ import {
   updatePendingBillImages,
   createSplitBillEntry,
   findActiveSplitsByBillIds,
+  findOriginalBillIdsBySplitAgencyName,
   findSplitBillEntryById,
   patchSplitPeriodFields,
   resolveSplitBillEntry,
@@ -190,13 +191,43 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
   const params = parseInvoiceListParams(query);
   const match = buildInvoiceListMatch(params);
   const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
+  const agencyNameFilter = (params.assignedAgencyName ?? "").trim();
   const sort = invoiceListSort(params.sortBy, params.sortDir);
   const dbStarted = nowMs();
 
   await ensureDb();
 
   try {
-    const cursorMatch: Record<string, unknown> = { ...match };
+    // Nếu có filter theo tên đại lý, cần mở rộng match để bao gồm cả bill có split
+    // (split1/split2) thuộc đại lý đó. Nếu không match được ở đây, bill có mã hạ cước
+    // giao cho đại lý sẽ bị loại khỏi danh sách.
+    const agencyNameRegex = agencyNameFilter
+      ? new RegExp(agencyNameFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+      : null;
+    const billIdsFromSplitAgency = agencyNameFilter
+      ? await findOriginalBillIdsBySplitAgencyName(agencyNameFilter, { statuses: ["active", "resolved"] })
+      : [];
+
+    const applyAgencyOr = (base: Record<string, unknown>): Record<string, unknown> => {
+      if (!agencyNameFilter) return base;
+      const orClause: Record<string, unknown>[] = [
+        { periods: { $elemMatch: { assignedAgencyName: { $regex: agencyNameRegex ?? "" } } } },
+      ];
+      if (billIdsFromSplitAgency.length > 0) {
+        orClause.push({
+          _id: {
+            $in: billIdsFromSplitAgency
+              .filter((x) => mongoose.isValidObjectId(x))
+              .map((x) => new mongoose.Types.ObjectId(x)),
+          },
+        });
+      }
+      const and = Array.isArray(base.$and) ? [...(base.$and as Record<string, unknown>[])] : [];
+      and.push({ $or: orClause });
+      return { ...base, $and: and };
+    };
+
+    const cursorMatch: Record<string, unknown> = applyAgencyOr({ ...match });
 
     if (params.cursor && params.sortBy === "_id") {
       const dir = params.sortDir === "desc" ? "$lt" : "$gt";
@@ -207,7 +238,7 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
 
     // Exclude pending bills from normal invoice list
     const pendingExclude = { $ne: true };
-    const matchWithPending = { ...match, isPending: pendingExclude };
+    const matchWithPending = { ...applyAgencyOr(match), isPending: pendingExclude };
     const cursorMatchWithPending = { ...cursorMatch, isPending: pendingExclude };
 
     const [total, docsRaw] = await Promise.all([
@@ -249,24 +280,48 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
         parentKeysWithThuChiSplit.add(`${key}_k${String(s.originalKy)}`);
       }
     }
+    const splitAgencyMatches = (
+      part: unknown
+    ): boolean => {
+      if (!agencyNameFilter) return true;
+      const p = (part ?? {}) as Record<string, unknown>;
+      const name = String(p.assignedAgencyName ?? "").trim();
+      if (!name) return false;
+      return agencyNameRegex ? agencyNameRegex.test(name) : name.toLowerCase().includes(agencyNameFilter.toLowerCase());
+    };
+
     const items = baseItems.map((b) => {
       const scopedSplits = (splitsByBillId[String(b._id)] ?? []).filter((s) => {
-        if (!agencyScopeId) return true;
         const s1 = (s.split1 ?? {}) as Record<string, unknown>;
         const s2 = (s.split2 ?? {}) as Record<string, unknown>;
-        const s1Aid = String(s1.assignedAgencyId ?? "").trim();
-        const s2Aid = String(s2.assignedAgencyId ?? "").trim();
-        return s1Aid === agencyScopeId || s2Aid === agencyScopeId;
+        if (agencyScopeId) {
+          const s1Aid = String(s1.assignedAgencyId ?? "").trim();
+          const s2Aid = String(s2.assignedAgencyId ?? "").trim();
+          if (s1Aid !== agencyScopeId && s2Aid !== agencyScopeId) return false;
+        }
+        if (agencyNameFilter) {
+          if (!splitAgencyMatches(s1) && !splitAgencyMatches(s2)) return false;
+        }
+        return true;
       });
-      const maskedPeriods = b.periods.map((p) => {
-        if (!parentKeysWithThuChiSplit.has(`${b._id}_k${p.ky}`)) return p;
-        return {
-          ...p,
-          assignedAgencyId: null,
-          assignedAgencyName: null,
-          dlGiaoName: null,
-        };
-      });
+
+      const maskedPeriods = b.periods
+        .map((p) => {
+          if (!parentKeysWithThuChiSplit.has(`${b._id}_k${p.ky}`)) return p;
+          return {
+            ...p,
+            assignedAgencyId: null,
+            assignedAgencyName: null,
+            dlGiaoName: null,
+          };
+        })
+        .filter((p) => {
+          if (!agencyNameFilter) return true;
+          const name = String(p.assignedAgencyName ?? "").trim();
+          if (!name) return false;
+          return agencyNameRegex ? agencyNameRegex.test(name) : name.toLowerCase().includes(agencyNameFilter.toLowerCase());
+        });
+
       return {
         ...b,
         periods: maskedPeriods,
@@ -289,7 +344,12 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
         })),
       };
     })
-    .filter((b) => !agencyScopeId || b.periods.length > 0 || b.splits.length > 0);
+    .filter((b) => {
+      if (agencyScopeId || agencyNameFilter) {
+        return b.periods.length > 0 || b.splits.length > 0;
+      }
+      return true;
+    });
     const serializeMs = nowMs() - serializeStarted;
     const nextCursor = hasNext ? String(docs[docs.length - 1]?._id ?? "") : null;
 
@@ -433,6 +493,7 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
     const resolvedSplits = resolvedSplitsAll.filter((s) => billIdSet.has(String(s.originalBillId)));
     const parentKeysWithThuChiSplit = new Set<string>();
     const splitsByBillId = new Map<string, Array<Record<string, unknown>>>();
+    const billHasResolvedSplit = new Set<string>();
     for (const s of [...activeSplits, ...resolvedSplits]) {
       const key = String(s.originalBillId);
       const arr = splitsByBillId.get(key) ?? [];
@@ -440,6 +501,9 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
       splitsByBillId.set(key, arr);
       if (((s as { createdBy?: string }).createdBy ?? "manual") === "thu-chi") {
         parentKeysWithThuChiSplit.add(`${key}_k${String(s.originalKy)}`);
+      }
+      if (String((s as { status?: unknown }).status ?? "") === "resolved") {
+        billHasResolvedSplit.add(key);
       }
     }
     const data = base.map((b) => {
@@ -482,7 +546,17 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
         })),
       };
     })
-    .filter((b) => !agencyScopeId || b.periods.length > 0 || b.splits.length > 0);
+    // Archive = bill có period đã hoàn tất HOẶC có resolved split (cả 2 phần đã thu).
+    // Bill chỉ có active split (chưa đóng) không được xem là archive.
+    .filter((b) => {
+      const hasCompletedPeriods = b.periods.length > 0;
+      const hasResolvedSplit = billHasResolvedSplit.has(String(b._id));
+      if (!hasCompletedPeriods && !hasResolvedSplit) return false;
+      if (agencyScopeId) {
+        return hasCompletedPeriods || b.splits.length > 0;
+      }
+      return true;
+    });
 
     return { data, source: "mongodb" };
   } catch (error) {

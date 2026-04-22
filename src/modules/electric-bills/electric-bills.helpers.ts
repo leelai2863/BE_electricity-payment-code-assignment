@@ -216,15 +216,9 @@ export function buildInvoiceListMatch(params: InvoiceListParams): Record<string,
     and.push({ evn: { $regex: escapeRegex(params.evn), $options: "i" } });
   }
 
-  if (params.assignedAgencyName) {
-    and.push({
-      periods: {
-        $elemMatch: {
-          assignedAgencyName: { $regex: escapeRegex(params.assignedAgencyName), $options: "i" },
-        },
-      },
-    });
-  }
+  // NOTE: `assignedAgencyName` filter được xử lý ở service layer (getInvoiceList) để có thể
+  // match cả các bill có split1/split2 thuộc đại lý đó (vì agency của split nằm ở collection
+  // SplitBillEntry, không nằm trong `bill.periods[]`).
 
   if (params.scanDdMm) {
     and.push({ periods: { $elemMatch: { scanDdMm: params.scanDdMm } } });
