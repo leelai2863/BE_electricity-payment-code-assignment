@@ -190,11 +190,6 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
   const params = parseInvoiceListParams(query);
   const match = buildInvoiceListMatch(params);
   const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
-  if (agencyScopeId) {
-    const and = Array.isArray(match.$and) ? [...(match.$and as Record<string, unknown>[])] : [];
-    and.push({ periods: { $elemMatch: { assignedAgencyId: agencyScopeId } } });
-    match.$and = and;
-  }
   const sort = invoiceListSort(params.sortBy, params.sortDir);
   const dbStarted = nowMs();
 
@@ -239,8 +234,7 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
               periods: bill.periods.filter((p) => String(p.assignedAgencyId ?? "").trim() === agencyScopeId),
             }
           : bill
-      )
-      .filter((bill) => !agencyScopeId || bill.periods.length > 0);
+      );
 
     // Attach active splits to each bill
     const billIds = baseItems.map((b) => String(b._id));
@@ -256,6 +250,14 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
       }
     }
     const items = baseItems.map((b) => {
+      const scopedSplits = (splitsByBillId[String(b._id)] ?? []).filter((s) => {
+        if (!agencyScopeId) return true;
+        const s1 = (s.split1 ?? {}) as Record<string, unknown>;
+        const s2 = (s.split2 ?? {}) as Record<string, unknown>;
+        const s1Aid = String(s1.assignedAgencyId ?? "").trim();
+        const s2Aid = String(s2.assignedAgencyId ?? "").trim();
+        return s1Aid === agencyScopeId || s2Aid === agencyScopeId;
+      });
       const maskedPeriods = b.periods.map((p) => {
         if (!parentKeysWithThuChiSplit.has(`${b._id}_k${p.ky}`)) return p;
         return {
@@ -268,7 +270,7 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
       return {
         ...b,
         periods: maskedPeriods,
-        splits: (splitsByBillId[String(b._id)] ?? []).map((s) => ({
+        splits: scopedSplits.map((s) => ({
           _id: String(s._id),
           originalBillId: s.originalBillId,
           originalKy: s.originalKy,
@@ -286,7 +288,8 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
           lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
         })),
       };
-    });
+    })
+    .filter((b) => !agencyScopeId || b.periods.length > 0 || b.splits.length > 0);
     const serializeMs = nowMs() - serializeStarted;
     const nextCursor = hasNext ? String(docs[docs.length - 1]?._id ?? "") : null;
 
@@ -419,8 +422,7 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
           agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true
         ),
       }))
-      .map((bill) => omitEvnField(bill))
-      .filter((bill) => bill.periods.length > 0);
+      .map((bill) => omitEvnField(bill));
 
     const billIds = base.map((b) => b._id);
     const [activeSplits, resolvedSplitsAll] = await Promise.all([
@@ -441,6 +443,14 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
       }
     }
     const data = base.map((b) => {
+      const scopedSplits = (splitsByBillId.get(b._id) ?? []).filter((s) => {
+        if (!agencyScopeId) return true;
+        const s1 = (s.split1 ?? {}) as Record<string, unknown>;
+        const s2 = (s.split2 ?? {}) as Record<string, unknown>;
+        const s1Aid = String(s1.assignedAgencyId ?? "").trim();
+        const s2Aid = String(s2.assignedAgencyId ?? "").trim();
+        return s1Aid === agencyScopeId || s2Aid === agencyScopeId;
+      });
       const maskedPeriods = b.periods.map((p) => {
         if (!parentKeysWithThuChiSplit.has(`${b._id}_k${p.ky}`)) return p;
         return {
@@ -453,7 +463,7 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
       return {
         ...b,
         periods: maskedPeriods,
-        splits: (splitsByBillId.get(b._id) ?? []).map((s) => ({
+        splits: scopedSplits.map((s) => ({
           _id: String(s._id ?? ""),
           originalBillId: String(s.originalBillId ?? b._id),
           originalKy: Number(s.originalKy) as 1 | 2 | 3,
@@ -471,7 +481,8 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
           lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
         })),
       };
-    });
+    })
+    .filter((b) => !agencyScopeId || b.periods.length > 0 || b.splits.length > 0);
 
     return { data, source: "mongodb" };
   } catch (error) {
