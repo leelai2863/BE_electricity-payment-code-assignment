@@ -10,6 +10,7 @@ import {
   listAccountingThuChiEntries,
   type ThuChiListQueryFlow,
   type ThuChiListQueryLink,
+  type ThuChiListSortMode,
   updateAccountingThuChiDoc,
 } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 import {
@@ -132,6 +133,12 @@ export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiR
       throw new ServiceError(400, "Tham số link phải là linked, unlinked hoặc all");
     }
 
+    const sortRaw = typeof query.sort === "string" ? query.sort.trim().toLowerCase() : "";
+    const sort: ThuChiListSortMode = sortRaw === "system" ? "system" : "recent";
+    if (sortRaw && sortRaw !== "recent" && sortRaw !== "system") {
+      throw new ServiceError(400, "Tham số sort phải là recent hoặc system");
+    }
+
     const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
     if (agencyScopeId && !mongoose.isValidObjectId(agencyScopeId)) {
       throw new ServiceError(403, "Không có quyền truy cập dữ liệu đại lý.");
@@ -145,6 +152,7 @@ export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiR
       bankContains: bankContains?.trim() || undefined,
       flow,
       link,
+      sort,
       skip: (page - 1) * pageSize,
       limit: pageSize,
     });

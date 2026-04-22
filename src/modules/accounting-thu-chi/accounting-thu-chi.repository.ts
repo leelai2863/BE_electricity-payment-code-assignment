@@ -24,6 +24,13 @@ export type AccountingThuChiLean = {
 
 export type ThuChiListQueryFlow = "all" | "thu" | "chi";
 export type ThuChiListQueryLink = "all" | "linked" | "unlinked";
+/** `recent`: mới lưu trước; `system`: ngày hạch toán giảm (mặc định báo cáo) */
+export type ThuChiListSortMode = "recent" | "system";
+
+function listSortSpec(mode: ThuChiListSortMode | undefined): Record<string, -1> {
+  if (mode === "system") return { txnDate: -1, _id: -1 };
+  return { updatedAt: -1, _id: -1 };
+}
 
 export async function listAccountingThuChiEntries(params: {
   from?: Date;
@@ -36,6 +43,7 @@ export async function listAccountingThuChiEntries(params: {
   bankContains?: string;
   flow?: ThuChiListQueryFlow;
   link?: ThuChiListQueryLink;
+  sort?: ThuChiListSortMode;
   skip: number;
   limit: number;
 }): Promise<{ items: AccountingThuChiLean[]; total: number }> {
@@ -79,9 +87,11 @@ export async function listAccountingThuChiEntries(params: {
 
   const q: Record<string, unknown> = clauses.length === 0 ? {} : clauses.length === 1 ? clauses[0]! : { $and: clauses };
 
+  const sort = listSortSpec(params.sort);
+
   const [total, items] = await Promise.all([
     AccountingThuChiEntry.countDocuments(q),
-    AccountingThuChiEntry.find(q).sort({ txnDate: -1, _id: -1 }).skip(params.skip).limit(params.limit).lean(),
+    AccountingThuChiEntry.find(q).sort(sort).skip(params.skip).limit(params.limit).lean(),
   ]);
 
   return { items: items as AccountingThuChiLean[], total };
