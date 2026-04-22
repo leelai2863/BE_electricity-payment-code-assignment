@@ -4,6 +4,8 @@ const AccountingThuChiEntrySchema = new Schema(
   {
     /** Ngày giao dịch (theo nghiệp vụ kế toán) */
     txnDate: { type: Date, required: true, index: true },
+    /** Ngày thanh toán thực tế dùng để ghép phân bổ Hoàn tiền (nếu nhập trễ so với ngày hạch toán). */
+    effectivePaymentDate: { type: Date, default: null, index: true },
     /** Nội dung */
     description: { type: String, default: "", trim: true },
     /** Nguồn — nếu trùng mã đại lý (Agency.code) và có Chi thì dùng cho phân bổ Hoàn tiền */

@@ -28,9 +28,7 @@ function lineDateKeyDdMm(line: MailQueueLineDto): string | null {
     dealCompletedAt: line.dealCompletedAt,
   });
   if (Number.isNaN(anchor.getTime())) return null;
-  const dd = String(anchor.getUTCDate()).padStart(2, "0");
-  const mm = String(anchor.getUTCMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}`;
+  return toDdMmFromDateInHoChiMinh(anchor);
 }
 
 /**
@@ -63,7 +61,8 @@ export function mergeThuChiAllocationsIntoRefundStates(
     const nameFromDb = idStr ? (agencyCurrentNameById.get(idStr) ?? "").trim() : "";
     const name = nameFromDb || String(e.linkedAgencyName ?? "").trim();
     if (!name) continue;
-    const dateKey = toDdMmFromDateInHoChiMinh(new Date(e.txnDate));
+    const effectiveDate = e.effectivePaymentDate ?? e.txnDate;
+    const dateKey = toDdMmFromDateInHoChiMinh(new Date(effectiveDate));
     if (!dateKey) continue;
     const key = `${normalizeTextKey(name)}__${dateKey}`;
     const c = typeof e.chi === "number" ? Math.trunc(e.chi) : 0;

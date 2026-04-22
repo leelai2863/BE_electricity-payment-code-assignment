@@ -8,6 +8,7 @@ function escapeRegExp(s: string): string {
 export type AccountingThuChiLean = {
   _id: mongoose.Types.ObjectId;
   txnDate: Date;
+  effectivePaymentDate?: Date | null;
   description?: string;
   source?: string;
   bank?: string;
@@ -94,6 +95,7 @@ export async function findAccountingThuChiById(id: string): Promise<AccountingTh
 
 export async function createAccountingThuChiDoc(input: {
   txnDate: Date;
+  effectivePaymentDate: Date | null;
   description: string;
   source: string;
   bank: string;
@@ -111,6 +113,7 @@ export async function updateAccountingThuChiDoc(
   id: string,
   input: Partial<{
     txnDate: Date;
+    effectivePaymentDate: Date | null;
     description: string;
     source: string;
     bank: string;

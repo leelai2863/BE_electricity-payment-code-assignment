@@ -99,6 +99,14 @@ function parseTxnDate(raw: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function parseEffectivePaymentDate(raw: unknown, fallbackTxnDate: Date): Date | null {
+  if (raw === undefined) return fallbackTxnDate;
+  if (raw === null || String(raw).trim() === "") return null;
+  const d = parseTxnDate(raw);
+  if (!d) return null;
+  return d;
+}
+
 export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiReadScope) {
   await ensureDb();
   try {
@@ -145,6 +153,7 @@ export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiR
       _id: String(row._id),
       stt: (page - 1) * pageSize + idx + 1,
       txnDate: row.txnDate.toISOString(),
+      effectivePaymentDate: row.effectivePaymentDate ? row.effectivePaymentDate.toISOString() : null,
       description: row.description ?? "",
       source: row.source ?? "",
       bank: row.bank ?? "",
@@ -181,6 +190,7 @@ export async function getThuChiById(id: string, scope?: ThuChiReadScope) {
     data: {
       _id: String(row._id),
       txnDate: row.txnDate.toISOString(),
+      effectivePaymentDate: row.effectivePaymentDate ? row.effectivePaymentDate.toISOString() : null,
       description: row.description ?? "",
       source: row.source ?? "",
       bank: row.bank ?? "",
@@ -201,6 +211,10 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
   await ensureDb();
   const txnDate = parseTxnDate(body.txnDate);
   if (!txnDate) throw new ServiceError(400, "txnDate không hợp lệ");
+  const effectivePaymentDate = parseEffectivePaymentDate(body.effectivePaymentDate, txnDate);
+  if (body.effectivePaymentDate !== undefined && body.effectivePaymentDate !== null && !effectivePaymentDate) {
+    throw new ServiceError(400, "effectivePaymentDate không hợp lệ");
+  }
 
   const description = typeof body.description === "string" ? body.description : "";
   const source = typeof body.source === "string" ? body.source : "";
@@ -218,6 +232,7 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
   try {
     const doc = await createAccountingThuChiDoc({
       txnDate,
+      effectivePaymentDate,
       description: description.trim(),
       source: source.trim(),
       bank: bank.trim(),
@@ -244,6 +259,7 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
         linkedAgencyCode: link.linkedAgencyCode,
         linkedAgencyName: link.linkedAgencyName,
         txnDate: txnDate.toISOString(),
+        effectivePaymentDate: effectivePaymentDate ? effectivePaymentDate.toISOString() : null,
         changeSummary: `Tạo dòng thu chi; nội dung tóm tắt: ${description.trim().slice(0, 200)}`,
       },
       ip: ctx?.ip ?? null,
@@ -261,6 +277,7 @@ function serializeDoc(row: Record<string, unknown>) {
   return {
     _id: String(row._id),
     txnDate: (row.txnDate as Date).toISOString(),
+    effectivePaymentDate: row.effectivePaymentDate instanceof Date ? row.effectivePaymentDate.toISOString() : null,
     description: String(row.description ?? ""),
     source: String(row.source ?? ""),
     bank: String(row.bank ?? ""),
@@ -285,6 +302,14 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
     const d = parseTxnDate(body.txnDate);
     if (!d) throw new ServiceError(400, "txnDate không hợp lệ");
     patch.txnDate = d;
+  }
+  if (body.effectivePaymentDate !== undefined) {
+    const fallbackTxn = (patch.txnDate as Date | undefined) ?? existing.txnDate;
+    const d = parseEffectivePaymentDate(body.effectivePaymentDate, fallbackTxn);
+    if (body.effectivePaymentDate !== null && !d) {
+      throw new ServiceError(400, "effectivePaymentDate không hợp lệ");
+    }
+    patch.effectivePaymentDate = d;
   }
   if (body.description !== undefined) patch.description = String(body.description ?? "").trim();
   if (body.bank !== undefined) patch.bank = String(body.bank ?? "").trim();
@@ -316,6 +341,7 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
     if (!updated) throw new ServiceError(404, "Không tìm thấy bản ghi");
     const changeParts: string[] = [];
     if (body.txnDate !== undefined) changeParts.push("ngày giao dịch");
+    if (body.effectivePaymentDate !== undefined) changeParts.push("ngày thanh toán thực tế");
     if (body.description !== undefined) changeParts.push("nội dung");
     if (body.bank !== undefined) changeParts.push("ngân hàng");
     if (body.notes !== undefined) changeParts.push("ghi chú");
