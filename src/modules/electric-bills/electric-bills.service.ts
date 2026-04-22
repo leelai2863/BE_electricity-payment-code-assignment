@@ -246,31 +246,47 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
     const billIds = baseItems.map((b) => String(b._id));
     const activeSplits = await findActiveSplitsByBillIds(billIds);
     const splitsByBillId: Record<string, typeof activeSplits> = {};
+    const parentKeysWithThuChiSplit = new Set<string>();
     for (const s of activeSplits) {
       const key = String(s.originalBillId);
       if (!splitsByBillId[key]) splitsByBillId[key] = [];
       splitsByBillId[key].push(s);
+      if (((s as { createdBy?: string }).createdBy ?? "manual") === "thu-chi") {
+        parentKeysWithThuChiSplit.add(`${key}_k${String(s.originalKy)}`);
+      }
     }
-    const items = baseItems.map((b) => ({
-      ...b,
-      splits: (splitsByBillId[String(b._id)] ?? []).map((s) => ({
-        _id: String(s._id),
-        originalBillId: s.originalBillId,
-        originalKy: s.originalKy,
-        customerCode: s.customerCode,
-        monthLabel: s.monthLabel,
-        month: s.month,
-        year: s.year,
-        originalAmount: s.originalAmount,
-        split1: s.split1,
-        split2: s.split2,
-        status: s.status,
-        resolvedAt: s.resolvedAt ? new Date(s.resolvedAt).toISOString() : null,
-        createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
-        sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
-        lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
-      })),
-    }));
+    const items = baseItems.map((b) => {
+      const maskedPeriods = b.periods.map((p) => {
+        if (!parentKeysWithThuChiSplit.has(`${b._id}_k${p.ky}`)) return p;
+        return {
+          ...p,
+          assignedAgencyId: null,
+          assignedAgencyName: null,
+          dlGiaoName: null,
+        };
+      });
+      return {
+        ...b,
+        periods: maskedPeriods,
+        splits: (splitsByBillId[String(b._id)] ?? []).map((s) => ({
+          _id: String(s._id),
+          originalBillId: s.originalBillId,
+          originalKy: s.originalKy,
+          customerCode: s.customerCode,
+          monthLabel: s.monthLabel,
+          month: s.month,
+          year: s.year,
+          originalAmount: s.originalAmount,
+          split1: s.split1,
+          split2: s.split2,
+          status: s.status,
+          resolvedAt: s.resolvedAt ? new Date(s.resolvedAt).toISOString() : null,
+          createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
+          sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
+          lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
+        })),
+      };
+    });
     const serializeMs = nowMs() - serializeStarted;
     const nextCursor = hasNext ? String(docs[docs.length - 1]?._id ?? "") : null;
 
@@ -413,33 +429,49 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
     ]);
     const billIdSet = new Set(billIds);
     const resolvedSplits = resolvedSplitsAll.filter((s) => billIdSet.has(String(s.originalBillId)));
+    const parentKeysWithThuChiSplit = new Set<string>();
     const splitsByBillId = new Map<string, Array<Record<string, unknown>>>();
     for (const s of [...activeSplits, ...resolvedSplits]) {
       const key = String(s.originalBillId);
       const arr = splitsByBillId.get(key) ?? [];
       arr.push(s as unknown as Record<string, unknown>);
       splitsByBillId.set(key, arr);
+      if (((s as { createdBy?: string }).createdBy ?? "manual") === "thu-chi") {
+        parentKeysWithThuChiSplit.add(`${key}_k${String(s.originalKy)}`);
+      }
     }
-    const data = base.map((b) => ({
-      ...b,
-      splits: (splitsByBillId.get(b._id) ?? []).map((s) => ({
-        _id: String(s._id ?? ""),
-        originalBillId: String(s.originalBillId ?? b._id),
-        originalKy: Number(s.originalKy) as 1 | 2 | 3,
-        customerCode: String(s.customerCode ?? b.customerCode),
-        monthLabel: String(s.monthLabel ?? b.monthLabel),
-        month: Number(s.month ?? b.month),
-        year: Number(s.year ?? b.year),
-        originalAmount: Number(s.originalAmount ?? 0),
-        split1: s.split1,
-        split2: s.split2,
-        status: String(s.status ?? "active"),
-        resolvedAt: s.resolvedAt ? new Date(String(s.resolvedAt)).toISOString() : null,
-        createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
-        sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
-        lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
-      })),
-    }));
+    const data = base.map((b) => {
+      const maskedPeriods = b.periods.map((p) => {
+        if (!parentKeysWithThuChiSplit.has(`${b._id}_k${p.ky}`)) return p;
+        return {
+          ...p,
+          assignedAgencyId: null,
+          assignedAgencyName: null,
+          dlGiaoName: null,
+        };
+      });
+      return {
+        ...b,
+        periods: maskedPeriods,
+        splits: (splitsByBillId.get(b._id) ?? []).map((s) => ({
+          _id: String(s._id ?? ""),
+          originalBillId: String(s.originalBillId ?? b._id),
+          originalKy: Number(s.originalKy) as 1 | 2 | 3,
+          customerCode: String(s.customerCode ?? b.customerCode),
+          monthLabel: String(s.monthLabel ?? b.monthLabel),
+          month: Number(s.month ?? b.month),
+          year: Number(s.year ?? b.year),
+          originalAmount: Number(s.originalAmount ?? 0),
+          split1: s.split1,
+          split2: s.split2,
+          status: String(s.status ?? "active"),
+          resolvedAt: s.resolvedAt ? new Date(String(s.resolvedAt)).toISOString() : null,
+          createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
+          sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
+          lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
+        })),
+      };
+    });
 
     return { data, source: "mongodb" };
   } catch (error) {
