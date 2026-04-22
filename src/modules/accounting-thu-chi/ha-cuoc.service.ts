@@ -358,6 +358,12 @@ export async function applyHaCuocAfterThuChiSaved(params: {
   const resolved = await resolveHaCuocTarget({ customerCode: code, amountOut: chi, anchorDate: params.anchorDate });
   const scanDdMm = formatAnchorDdMmHoChiMinh(params.anchorDate);
 
+  // Split phần Thu chi đã trả luôn được coi là đã chốt ngay tại thời điểm ghi nhận:
+  // paymentConfirmed + cccdConfirmed + dealCompletedAt = anchorDate. Thiếu `dealCompletedAt`
+  // sẽ khiến `patchSplitPeriod` không nhận ra split1 đã done, không trigger
+  // `completeOriginalPeriodAfterSplits`, dẫn đến bill không chuyển qua archive.
+  const thuChiDealCompletedAt = new Date(params.anchorDate).toISOString();
+
   if (resolved.mode === "create") {
     let splitId: string | null = null;
     try {
@@ -377,6 +383,7 @@ export async function applyHaCuocAfterThuChiSaved(params: {
           assignedAgencyId: null,
           assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
           dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
+          dealCompletedAt: new Date(params.anchorDate),
         },
         split2: {
           amount: resolved.originalAmount - chi,
@@ -394,6 +401,7 @@ export async function applyHaCuocAfterThuChiSaved(params: {
         cccdConfirmed: true,
         assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
         dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
+        dealCompletedAt: thuChiDealCompletedAt,
       });
       return buildHaCuocContext(resolved, chi, splitId, false);
     } catch (err) {
@@ -408,7 +416,15 @@ export async function applyHaCuocAfterThuChiSaved(params: {
     }
   }
 
-  await patchSplitPeriod(resolved.splitId, 2, { paymentConfirmed: true, scanDdMm });
+  // resolveExisting: Thu chi đợt 2 trả nốt phần còn lại (split2). Chốt luôn split2 để
+  // khi cả 2 split đều có dealCompletedAt, parent kỳ sẽ được đóng và bill rời khỏi
+  // "chưa duyệt" qua archive.
+  await patchSplitPeriod(resolved.splitId, 2, {
+    paymentConfirmed: true,
+    cccdConfirmed: true,
+    scanDdMm,
+    dealCompletedAt: thuChiDealCompletedAt,
+  });
   return buildHaCuocContext(resolved, chi, resolved.splitId, true);
 }
 

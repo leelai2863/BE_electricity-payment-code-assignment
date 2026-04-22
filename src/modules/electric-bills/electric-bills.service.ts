@@ -2411,14 +2411,42 @@ export async function patchSplitPeriod(
     s2r
   );
 
-  const s1Done = Boolean(entry.split1.dealCompletedAt);
-  const s2Done = Boolean(entry.split2.dealCompletedAt);
+  // Self-heal cho dữ liệu cũ: split "Hạ Cước" do Thu chi tạo trước đây có thể thiếu
+  // `dealCompletedAt` trên phần đã trả. Nếu phần đó đã xác nhận đầy đủ (payment +
+  // cccd + scanDdMm) và do thu-chi lock, coi như đã chốt để không kẹt bill ở pending.
+  const lockedByThuChi =
+    Boolean((entry as { lockedByThuChi?: boolean }).lockedByThuChi) ||
+    String((entry as { createdBy?: string }).createdBy ?? "") === "thu-chi";
+  const healThuChiPartIfNeeded = async (
+    partIdx: 1 | 2,
+    part: Record<string, unknown>
+  ): Promise<Record<string, unknown>> => {
+    if (!lockedByThuChi) return part;
+    if (part.dealCompletedAt) return part;
+    const payConfirmed = Boolean(part.paymentConfirmed);
+    const cccdConfirmed = Boolean(part.cccdConfirmed);
+    const hasScan = typeof part.scanDdMm === "string" && String(part.scanDdMm).trim().length > 0;
+    const isHaCuocAgency =
+      String(part.assignedAgencyName ?? "").trim().toLowerCase() === "hạ cước" ||
+      String(part.assignedAgencyName ?? "").trim().toLowerCase() === "ha cuoc";
+    // Phần thu-chi trả sẽ luôn là "Hạ Cước" (phần 1), hoặc là phần 2 khi thu-chi đợt 2 đóng split.
+    if (!payConfirmed || !cccdConfirmed || !hasScan) return part;
+    if (partIdx === 1 && !isHaCuocAgency) return part;
+    const nowIso = new Date().toISOString();
+    await patchSplitPeriodFields(splitId, partIdx, { dealCompletedAt: nowIso });
+    return { ...part, dealCompletedAt: nowIso };
+  };
+  const healedS1 = await healThuChiPartIfNeeded(1, s1r);
+  const healedS2 = await healThuChiPartIfNeeded(2, s2r);
+
+  const s1Done = Boolean(healedS1.dealCompletedAt);
+  const s2Done = Boolean(healedS2.dealCompletedAt);
   if (s1Done && s2Done) {
     await completeOriginalPeriodAfterSplits({
       originalBillId: entry.originalBillId,
       originalKy: entry.originalKy,
-      split1: s1r,
-      split2: s2r,
+      split1: healedS1,
+      split2: healedS2,
     });
     await resolveSplitBillEntry(splitId);
     const refreshed = await findSplitBillEntryById(splitId);
