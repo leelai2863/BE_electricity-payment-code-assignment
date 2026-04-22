@@ -13,6 +13,7 @@ import {
 import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
 import { isUserDrivenRefundCondition, normalizeRefundFeeConditionInput } from "@/lib/refund-fee-condition";
 import type {
+  CaSlot,
   ElectricBillPeriod,
   MailQueueLineDto,
   RefundFeeRuleDto,
@@ -46,6 +47,19 @@ import {
   assignElectricBillIfAvailable,
   markVoucherCodeCompleted,
   newObjectId,
+  findPendingBills,
+  setPendingBill,
+  resolvePendingBill,
+  updatePendingBillImages,
+  createSplitBillEntry,
+  findActiveSplitsByBillIds,
+  findSplitBillEntryById,
+  patchSplitPeriodFields,
+  resolveSplitBillEntry,
+  cancelSplitBillEntry,
+  findActiveSplitsByOriginalBill,
+  findResolvedSplitEntriesForQueue,
+  ensureRefundLineStateSplitPartIndex,
 } from "@/modules/electric-bills/electric-bills.repository";
 import {
   ServiceError,
@@ -193,10 +207,15 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
       cursorMatch.$and = cursorAnd;
     }
 
+    // Exclude pending bills from normal invoice list
+    const pendingExclude = { $ne: true };
+    const matchWithPending = { ...match, isPending: pendingExclude };
+    const cursorMatchWithPending = { ...cursorMatch, isPending: pendingExclude };
+
     const [total, docsRaw] = await Promise.all([
-      countInvoiceList(match),
+      countInvoiceList(matchWithPending),
       findInvoiceListDocs({
-        match: cursorMatch,
+        match: cursorMatchWithPending,
         sort,
         skip: params.cursor ? 0 : (params.page - 1) * params.pageSize,
         limit: params.pageSize + 1,
@@ -208,7 +227,7 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
     const docs = hasNext ? docsRaw.slice(0, params.pageSize) : docsRaw;
 
     const serializeStarted = nowMs();
-    const items = docs
+    const baseItems = docs
       .map((d) => serializeElectricBill(d as Record<string, unknown>))
       .map((bill) =>
         agencyScopeId
@@ -219,6 +238,33 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
           : bill
       )
       .filter((bill) => !agencyScopeId || bill.periods.length > 0);
+
+    // Attach active splits to each bill
+    const billIds = baseItems.map((b) => String(b._id));
+    const activeSplits = await findActiveSplitsByBillIds(billIds);
+    const splitsByBillId: Record<string, typeof activeSplits> = {};
+    for (const s of activeSplits) {
+      const key = String(s.originalBillId);
+      if (!splitsByBillId[key]) splitsByBillId[key] = [];
+      splitsByBillId[key].push(s);
+    }
+    const items = baseItems.map((b) => ({
+      ...b,
+      splits: (splitsByBillId[String(b._id)] ?? []).map((s) => ({
+        _id: String(s._id),
+        originalBillId: s.originalBillId,
+        originalKy: s.originalKy,
+        customerCode: s.customerCode,
+        monthLabel: s.monthLabel,
+        month: s.month,
+        year: s.year,
+        originalAmount: s.originalAmount,
+        split1: s.split1,
+        split2: s.split2,
+        status: s.status,
+        resolvedAt: s.resolvedAt ? new Date(s.resolvedAt).toISOString() : null,
+      })),
+    }));
     const serializeMs = nowMs() - serializeStarted;
     const nextCursor = hasNext ? String(docs[docs.length - 1]?._id ?? "") : null;
 
@@ -343,7 +389,7 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
 
   try {
     const docs = await findBillsByYearMonth(year, month);
-    const data = docs
+    const base = docs
       .map((d) => serializeElectricBill(d as Record<string, unknown>))
       .map((bill) => ({
         ...bill,
@@ -354,10 +400,53 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
       .map((bill) => omitEvnField(bill))
       .filter((bill) => bill.periods.length > 0);
 
+    const billIds = base.map((b) => b._id);
+    const [activeSplits, resolvedSplitsAll] = await Promise.all([
+      findActiveSplitsByBillIds(billIds),
+      findResolvedSplitEntriesForQueue(),
+    ]);
+    const billIdSet = new Set(billIds);
+    const resolvedSplits = resolvedSplitsAll.filter((s) => billIdSet.has(String(s.originalBillId)));
+    const splitsByBillId = new Map<string, Array<Record<string, unknown>>>();
+    for (const s of [...activeSplits, ...resolvedSplits]) {
+      const key = String(s.originalBillId);
+      const arr = splitsByBillId.get(key) ?? [];
+      arr.push(s as unknown as Record<string, unknown>);
+      splitsByBillId.set(key, arr);
+    }
+    const data = base.map((b) => ({
+      ...b,
+      splits: (splitsByBillId.get(b._id) ?? []).map((s) => ({
+        _id: String(s._id ?? ""),
+        originalBillId: String(s.originalBillId ?? b._id),
+        originalKy: Number(s.originalKy) as 1 | 2 | 3,
+        customerCode: String(s.customerCode ?? b.customerCode),
+        monthLabel: String(s.monthLabel ?? b.monthLabel),
+        month: Number(s.month ?? b.month),
+        year: Number(s.year ?? b.year),
+        originalAmount: Number(s.originalAmount ?? 0),
+        split1: s.split1,
+        split2: s.split2,
+        status: String(s.status ?? "active"),
+        resolvedAt: s.resolvedAt ? new Date(String(s.resolvedAt)).toISOString() : null,
+      })),
+    }));
+
     return { data, source: "mongodb" };
   } catch (error) {
     throw new ServiceError(503, getErrorMessage(error, "Không đọc được MongoDB"), { data: [] });
   }
+}
+
+function mailQueueRefundStateKey(billId: string, ky: number, splitPart?: 0 | 1 | 2) {
+  const sp = splitPart === 1 || splitPart === 2 ? splitPart : 0;
+  return sp === 0 ? `${billId}_k${ky}` : `${billId}_k${ky}_s${sp}`;
+}
+
+function splitDealIso(raw: unknown): string {
+  if (raw instanceof Date) return raw.toISOString();
+  if (typeof raw === "string" && raw.trim()) return new Date(raw).toISOString();
+  return new Date().toISOString();
 }
 
 /** Snapshot mail-queue + phân bổ thu chi — dùng cho GET và cho PATCH (kiểm tra xác nhận nhập tay). */
@@ -368,19 +457,27 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
   refundWarnings: string[];
   source: "mongodb";
 }> {
-  const [docs, lineStateDocs, feeRuleDocs, chiEntryDocs] = await Promise.all([
+  await ensureRefundLineStateSplitPartIndex();
+
+  const [docs, lineStateDocs, feeRuleDocs, chiEntryDocs, resolvedSplits] = await Promise.all([
     findMailQueueBills(),
     findRefundLineStates(),
     findRefundFeeRules(),
     findLinkedChiEntries(),
+    findResolvedSplitEntriesForQueue(),
   ]);
+
+  const companyByBillId = new Map<string, string>();
+  for (const d of docs) {
+    companyByBillId.set(String((d as { _id?: unknown })._id), String((d as { company?: string }).company ?? ""));
+  }
 
   const lines: MailQueueLineDto[] = [];
   const resolvedLineStates: RefundLineStateDto[] = [];
   const lineStateMap = new Map<string, RefundLineStateDto>();
   for (const x of lineStateDocs) {
     const dto = serializeRefundLineStateDoc(x);
-    lineStateMap.set(`${dto.billId}_k${dto.ky}`, dto);
+    lineStateMap.set(mailQueueRefundStateKey(dto.billId, dto.ky, dto.splitPart), dto);
   }
   const feeRules = feeRuleDocs.map((x) => serializeRefundFeeRuleDoc(x));
   const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
@@ -409,6 +506,43 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
         resolvedStatus: null,
         resolvedPhiPct: null,
         dealCompletedAt: p.dealCompletedAt,
+        splitPart: 0,
+      });
+    }
+  }
+
+  for (const ent of resolvedSplits) {
+    const s1 = ent.split1 as Record<string, unknown> | undefined;
+    const s2 = ent.split2 as Record<string, unknown> | undefined;
+    if (!s1?.dealCompletedAt || !s2?.dealCompletedAt) continue;
+    const bid = String(ent.originalBillId);
+    const company = companyByBillId.get(bid) ?? "";
+    const oKy = ent.originalKy as 1 | 2 | 3;
+    for (const { sp, s } of [
+      { sp: 1 as const, s: s1 },
+      { sp: 2 as const, s: s2 },
+    ]) {
+      if (agencyScopeId && String(s.assignedAgencyId ?? "").trim() !== agencyScopeId) continue;
+      lines.push({
+        billId: bid,
+        customerCode: ent.customerCode,
+        monthLabel: ent.monthLabel ?? "",
+        month: ent.month,
+        year: ent.year,
+        company,
+        ky: oKy,
+        amount: typeof s.amount === "number" ? s.amount : null,
+        assignedAgencyName: s.assignedAgencyName != null ? String(s.assignedAgencyName) : null,
+        ca: (s.ca === "10h" || s.ca === "16h" || s.ca === "24h" ? s.ca : null) as CaSlot | null,
+        dlGiaoName: s.dlGiaoName != null ? String(s.dlGiaoName) : null,
+        customerName: s.customerName != null ? String(s.customerName) : null,
+        scanDdMm: s.scanDdMm != null ? String(s.scanDdMm) : null,
+        cardType: s.cardType != null ? String(s.cardType) : null,
+        resolvedStatus: null,
+        resolvedPhiPct: null,
+        dealCompletedAt: splitDealIso(s.dealCompletedAt),
+        splitPart: sp,
+        refundOnly: true,
       });
     }
   }
@@ -427,7 +561,8 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
     });
     line.resolvedStatus = resolved?.statusLabel ?? null;
     line.resolvedPhiPct = resolved?.pct ?? null;
-    const stateKey = `${line.billId}_k${line.ky}`;
+    const sp = (line.splitPart === 1 || line.splitPart === 2 ? line.splitPart : 0) as 0 | 1 | 2;
+    const stateKey = mailQueueRefundStateKey(line.billId, line.ky, sp);
     const existing = lineStateMap.get(stateKey);
     const anchor = refundAnchorDateUtc({
       year: line.year,
@@ -445,6 +580,7 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
     resolvedLineStates.push({
       billId: line.billId,
       ky: line.ky,
+      splitPart: sp,
       agencyName,
       status: line.resolvedStatus ?? "",
       phiPct: line.resolvedPhiPct,
@@ -822,7 +958,10 @@ export async function patchRefundLineStates(
     const thuChiByLine = new Map<string, number>();
     if (snap) {
       for (const s of snap.refundLineStates) {
-        thuChiByLine.set(`${s.billId}_k${s.ky}`, s.daHoanFromThuChi ?? 0);
+        thuChiByLine.set(
+          mailQueueRefundStateKey(s.billId, s.ky, s.splitPart),
+          s.daHoanFromThuChi ?? 0
+        );
       }
     }
 
@@ -873,13 +1012,14 @@ export async function patchRefundLineStates(
       }
 
       if (it.daHoan !== undefined && snap) {
-        const existing = await findRefundLineStateOne(it.billId, ky);
+        const sp = it.splitPart === 1 || it.splitPart === 2 ? it.splitPart : 0;
+        const existing = await findRefundLineStateOne(it.billId, ky, sp);
         const curDaHoan = typeof existing?.daHoan === "number" ? existing.daHoan : 0;
         const newDaHoan = Number(it.daHoan) || 0;
-        const lineKey = `${it.billId}_k${ky}`;
+        const lineKey = mailQueueRefundStateKey(it.billId, ky, sp);
         const fromThuChi = thuChiByLine.get(lineKey) ?? 0;
         if (fromThuChi > 0 && newDaHoan !== curDaHoan && !confirmManualDaHoanOverride) {
-          const lk = `${it.billId}_k${ky}`;
+          const lk = lineKey;
           conflictByLineKey.set(lk, {
             billId: it.billId,
             ky,
@@ -934,10 +1074,11 @@ export async function patchRefundLineStates(
         dealCompletedAt: typeof it.dealCompletedAt === "string" ? it.dealCompletedAt : "",
       };
 
-      const existing = await findRefundLineStateOne(it.billId, ky);
+      const sp = it.splitPart === 1 || it.splitPart === 2 ? it.splitPart : 0;
+      const existing = await findRefundLineStateOne(it.billId, ky, sp);
       const curDaHoan = typeof existing?.daHoan === "number" ? existing.daHoan : 0;
       const newDaHoan = it.daHoan !== undefined ? Number(it.daHoan) || 0 : curDaHoan;
-      const lineKey = `${it.billId}_k${ky}`;
+      const lineKey = mailQueueRefundStateKey(it.billId, ky, sp);
       const fromThuChi = thuChiByLine.get(lineKey) ?? 0;
 
       const anchor = refundAnchorDateUtc(anchorInput);
@@ -971,12 +1112,17 @@ export async function patchRefundLineStates(
       const statusChanged = statusTouched && nextStatusNorm !== prevStatus;
       const daHoanChanged = it.daHoan !== undefined && newDaHoan !== curDaHoan;
 
-      const doc = await upsertRefundLineStateDoc(it.billId, ky, {
-        agencyName,
-        status: newStatus,
-        phiPct: newPhi,
-        daHoan: newDaHoan,
-      });
+      const doc = await upsertRefundLineStateDoc(
+        it.billId,
+        ky,
+        {
+          agencyName,
+          status: newStatus,
+          phiPct: newPhi,
+          daHoan: newDaHoan,
+        },
+        sp
+      );
 
       if (doc) out.push(serializeRefundLineStateDoc(doc.toObject()));
 
@@ -1087,12 +1233,17 @@ export async function migrateRefundLocalStorage(body: {
         newPhi = await resolveRefundFeePctFromLine(agencyName, newStatus, anchorInput);
       }
 
-      const doc = await upsertRefundLineStateDoc(it.billId, ky, {
-        agencyName,
-        status: newStatus,
-        phiPct: newPhi,
-        daHoan: newDaHoan,
-      });
+      const doc = await upsertRefundLineStateDoc(
+        it.billId,
+        ky,
+        {
+          agencyName,
+          status: newStatus,
+          phiPct: newPhi,
+          daHoan: newDaHoan,
+        },
+        0
+      );
 
       if (doc) outStates.push(serializeRefundLineStateDoc(doc.toObject()));
     }
@@ -1789,4 +1940,313 @@ export async function patchElectricBill(id: string, body: PatchBody, auditLabels
     if (error instanceof ServiceError) throw error;
     throw new ServiceError(500, getErrorMessage(error, "Cập nhật không thành công"));
   }
+}
+
+// ─── Mã treo (Pending bills) ─────────────────────────────────────────────────
+
+export async function getPendingBillList() {
+  await ensureDb();
+  const docs = await findPendingBills();
+  return {
+    data: docs.map((d) => serializeElectricBill(d as Record<string, unknown>)),
+    source: "mongodb",
+  };
+}
+
+export async function markBillAsPending(id: string, note?: string) {
+  await ensureDb();
+  const doc = await setPendingBill(id, note);
+  if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  return { data: serializeElectricBill(doc as Record<string, unknown>), source: "mongodb" };
+}
+
+export async function markBillAsResolved(id: string) {
+  await ensureDb();
+  const doc = await resolvePendingBill(id);
+  if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  return { data: serializeElectricBill(doc as Record<string, unknown>), source: "mongodb" };
+}
+
+export async function uploadPendingImage(
+  id: string,
+  imageField: "bill" | "cccd",
+  filePath: string
+) {
+  await ensureDb();
+  const updates =
+    imageField === "bill"
+      ? { pendingBillImagePath: filePath }
+      : { pendingCccdImagePath: filePath };
+  const doc = await updatePendingBillImages(id, updates);
+  if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  return { data: serializeElectricBill(doc as Record<string, unknown>), source: "mongodb" };
+}
+
+// ─── Hạ cước (Split bills) ───────────────────────────────────────────────────
+
+export async function createBillSplit(
+  billId: string,
+  body: {
+    ky: 1 | 2 | 3;
+    splitAmount1: number;
+  }
+) {
+  await ensureDb();
+  const bill = await findElectricBillById(billId);
+  if (!bill) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+
+  const period = bill.periods.find((p) => p.ky === body.ky);
+  if (!period) throw new ServiceError(400, `Không có kỳ ${body.ky} trong hóa đơn`);
+  if (period.amount == null) throw new ServiceError(400, "Kỳ này chưa có số tiền");
+
+  const originalAmount = period.amount as number;
+  const splitAmount1 = Math.round(Number(body.splitAmount1));
+  if (!Number.isFinite(splitAmount1) || splitAmount1 <= 0)
+    throw new ServiceError(400, "Số tiền tách 1 không hợp lệ");
+  if (splitAmount1 >= originalAmount)
+    throw new ServiceError(400, "Số tiền tách 1 phải nhỏ hơn số tiền gốc");
+  const splitAmount2 = originalAmount - splitAmount1;
+
+  // Kiểm tra xem đã có split chưa
+  const existingSplits = await findActiveSplitsByOriginalBill(billId);
+  const existingOnKy = existingSplits.find((s) => s.originalKy === body.ky);
+  if (existingOnKy) throw new ServiceError(409, "Kỳ này đã được tách — hủy tách cũ trước");
+
+  const entry = await createSplitBillEntry({
+    originalBillId: billId,
+    originalKy: body.ky,
+    customerCode: bill.customerCode,
+    monthLabel: bill.monthLabel ?? "",
+    month: bill.month,
+    year: bill.year,
+    originalAmount,
+    split1: { amount: splitAmount1 },
+    split2: { amount: splitAmount2 },
+  });
+
+  return {
+    data: {
+      _id: String(entry._id),
+      originalBillId: billId,
+      originalKy: body.ky,
+      customerCode: bill.customerCode,
+      originalAmount,
+      split1: entry.split1,
+      split2: entry.split2,
+      status: "active",
+    },
+    source: "mongodb",
+  };
+}
+
+function pickFirstStr(...vals: (string | null | undefined)[]): string | null {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function caFromSplitField(raw: unknown): CaSlot | null {
+  if (raw === "10h" || raw === "16h" || raw === "24h") return raw;
+  return null;
+}
+
+/** Sau mỗi lần cập nhật split: đồng bộ AssignedCode theo từng số tiền tách (Hoàn tiền). */
+async function syncAssignedCodesForSplitParts(
+  billId: string,
+  originalKy: 1 | 2 | 3,
+  split1: Record<string, unknown>,
+  split2: Record<string, unknown>
+) {
+  const bill = await findElectricBillById(billId);
+  if (!bill) return;
+  const customerCode = bill.customerCode;
+  const year = bill.year;
+  const month = bill.month;
+  for (const sp of [split1, split2]) {
+    const aid = sp.assignedAgencyId != null ? String(sp.assignedAgencyId).trim() : "";
+    const an = sp.assignedAgencyName != null ? String(sp.assignedAgencyName).trim() : "";
+    const amt = typeof sp.amount === "number" ? sp.amount : null;
+    if (!aid || !an || amt == null) continue;
+    await upsertAssignedCodeDoc({
+      customerCode,
+      amount: amt,
+      year,
+      month,
+      agencyId: aid,
+      agencyName: an,
+      billId,
+      ky: originalKy,
+    });
+  }
+}
+
+/** Khi 2 mã con đã ✓: ghi dealCompletedAt kỳ gốc (bỏ qua validate UI), đủ field cho Gửi mail. */
+async function completeOriginalPeriodAfterSplits(entry: {
+  originalBillId: string;
+  originalKy: number;
+  split1: Record<string, unknown>;
+  split2: Record<string, unknown>;
+}) {
+  const doc = await findElectricBillById(entry.originalBillId);
+  if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  const dto = serializeElectricBill(doc.toObject());
+  const oky = entry.originalKy as 1 | 2 | 3;
+  const s1 = entry.split1;
+  const s2 = entry.split2;
+  const completedAt = new Date().toISOString();
+  const nextPeriods = dto.periods.map((p) => {
+    if (p.ky !== oky) return p;
+    return {
+      ...p,
+      dealCompletedAt: completedAt,
+      scanDdMm: pickFirstStr(p.scanDdMm, s1.scanDdMm as string, s2.scanDdMm as string),
+      ca: p.ca ?? caFromSplitField(s1.ca) ?? caFromSplitField(s2.ca),
+      assignedAgencyId: pickFirstStr(p.assignedAgencyId, s1.assignedAgencyId as string, s2.assignedAgencyId as string),
+      assignedAgencyName: pickFirstStr(
+        p.assignedAgencyName,
+        s1.assignedAgencyName as string,
+        s2.assignedAgencyName as string
+      ),
+      dlGiaoName: pickFirstStr(p.dlGiaoName, s1.dlGiaoName as string, s2.dlGiaoName as string),
+      customerName: pickFirstStr(p.customerName, s1.customerName as string, s2.customerName as string),
+      cardType: pickFirstStr(p.cardType, s1.cardType as string, s2.cardType as string),
+      paymentConfirmed: Boolean(
+        p.paymentConfirmed || (Boolean(s1.paymentConfirmed) && Boolean(s2.paymentConfirmed))
+      ),
+      cccdConfirmed: Boolean(p.cccdConfirmed || (Boolean(s1.cccdConfirmed) && Boolean(s2.cccdConfirmed))),
+    };
+  });
+  doc.set("periods", periodsDtoToMongoSchema(nextPeriods) as typeof doc.periods);
+  syncBillLevelFromPeriods(doc, nextPeriods);
+  doc.markModified("periods");
+  await doc.save();
+  const allPeriodsConfirmed = nextPeriods.every((p) => p.amount == null || Boolean(p.dealCompletedAt));
+  if (allPeriodsConfirmed) {
+    await markVoucherCodeCompleted(doc.customerCode);
+  }
+  const orig = nextPeriods.find((p) => p.ky === oky);
+  if (orig?.amount != null && orig.assignedAgencyId?.trim() && orig.assignedAgencyName?.trim()) {
+    await upsertAssignedCodeDoc({
+      customerCode: doc.customerCode,
+      amount: orig.amount,
+      year: doc.year,
+      month: doc.month,
+      agencyId: orig.assignedAgencyId.trim(),
+      agencyName: orig.assignedAgencyName.trim(),
+      billId: String(doc._id),
+      ky: oky,
+    });
+  }
+  return doc;
+}
+
+async function attachActiveSplitsToSerializedBill(
+  bill: ReturnType<typeof serializeElectricBill>
+) {
+  const activeSplits = await findActiveSplitsByBillIds([bill._id]);
+  return {
+    ...bill,
+    splits: activeSplits.map((s) => ({
+      _id: String(s._id),
+      originalBillId: s.originalBillId,
+      originalKy: s.originalKy,
+      customerCode: s.customerCode,
+      monthLabel: s.monthLabel,
+      month: s.month,
+      year: s.year,
+      originalAmount: s.originalAmount,
+      split1: s.split1,
+      split2: s.split2,
+      status: s.status,
+      resolvedAt: s.resolvedAt ? new Date(s.resolvedAt).toISOString() : null,
+    })),
+  };
+}
+
+export async function patchSplitPeriod(
+  splitId: string,
+  splitIdx: 1 | 2,
+  changes: Record<string, unknown>
+) {
+  await ensureDb();
+  let entry = await patchSplitPeriodFields(splitId, splitIdx, changes);
+  if (!entry) throw new ServiceError(404, "Không tìm thấy split");
+
+  const s1r = entry.split1 as unknown as Record<string, unknown>;
+  const s2r = entry.split2 as unknown as Record<string, unknown>;
+  await syncAssignedCodesForSplitParts(
+    entry.originalBillId,
+    entry.originalKy as 1 | 2 | 3,
+    s1r,
+    s2r
+  );
+
+  const s1Done = Boolean(entry.split1.dealCompletedAt);
+  const s2Done = Boolean(entry.split2.dealCompletedAt);
+  if (s1Done && s2Done) {
+    await completeOriginalPeriodAfterSplits({
+      originalBillId: entry.originalBillId,
+      originalKy: entry.originalKy,
+      split1: s1r,
+      split2: s2r,
+    });
+    await resolveSplitBillEntry(splitId);
+    const refreshed = await findSplitBillEntryById(splitId);
+    if (refreshed) entry = refreshed;
+  }
+
+  const billDoc = await findElectricBillById(entry.originalBillId);
+  const base = billDoc ? serializeElectricBill(billDoc.toObject()) : null;
+  const billPayload = base ? await attachActiveSplitsToSerializedBill(base) : undefined;
+
+  return {
+    data: {
+      _id: String(entry._id),
+      split1: entry.split1,
+      split2: entry.split2,
+      status: entry.status,
+      bill: billPayload,
+    },
+    source: "mongodb",
+  };
+}
+
+export async function cancelBillSplit(splitId: string) {
+  await ensureDb();
+  const entry = await findSplitBillEntryById(splitId);
+  if (!entry) throw new ServiceError(404, "Không tìm thấy split");
+  if (entry.status !== "active") {
+    throw new ServiceError(409, "Split này không còn ở trạng thái đang tách để hủy");
+  }
+
+  const bill = await findElectricBillById(entry.originalBillId);
+  if (bill) {
+    const customerCode = bill.customerCode;
+    const year = bill.year;
+    const month = bill.month;
+    const s1Amount = typeof entry.split1?.amount === "number" ? entry.split1.amount : null;
+    const s2Amount = typeof entry.split2?.amount === "number" ? entry.split2.amount : null;
+    if (s1Amount != null) {
+      await deleteAssignedCodeDoc(customerCode, s1Amount, year, month);
+    }
+    if (s2Amount != null) {
+      await deleteAssignedCodeDoc(customerCode, s2Amount, year, month);
+    }
+  }
+
+  await cancelSplitBillEntry(splitId);
+
+  const billDoc = await findElectricBillById(entry.originalBillId);
+  const base = billDoc ? serializeElectricBill(billDoc.toObject()) : null;
+  const billPayload = base ? await attachActiveSplitsToSerializedBill(base) : undefined;
+
+  return {
+    data: {
+      splitId,
+      status: "cancelled" as const,
+      bill: billPayload,
+    },
+    source: "mongodb" as const,
+  };
 }

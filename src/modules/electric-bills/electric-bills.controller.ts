@@ -28,7 +28,16 @@ import {
   patchElectricBill,
   createManualElectricBill,
   recordDataExportAudit,
+  getPendingBillList,
+  markBillAsPending,
+  markBillAsResolved,
+  uploadPendingImage,
+  createBillSplit,
+  patchSplitPeriod,
+  cancelBillSplit,
 } from "./electric-bills.service";
+import path from "path";
+import fs from "fs";
 
 function handleError(res: Response, error: unknown, fallbackMessage: string) {
   if (error instanceof ServiceError) {
@@ -349,4 +358,117 @@ export async function createManualElectricBillHandler(req: Request, res: Respons
   } catch (error) {
     handleError(res, error, "Không tạo được hóa đơn");
   }
+}
+
+// ─── Mã treo (Pending bills) ─────────────────────────────────────────────────
+
+export async function getPendingListHandler(req: Request, res: Response) {
+  try {
+    const result = await getPendingBillList();
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Lỗi tải danh sách mã treo");
+  }
+}
+
+export async function setPendingHandler(req: Request, res: Response) {
+  try {
+    const id = String(req.params.id);
+    const note = typeof req.body?.note === "string" ? req.body.note : undefined;
+    const result = await markBillAsPending(id, note);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không đánh dấu được mã treo");
+  }
+}
+
+export async function resolvePendingHandler(req: Request, res: Response) {
+  try {
+    const id = String(req.params.id);
+    const result = await markBillAsResolved(id);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Không giải treo được hóa đơn");
+  }
+}
+
+export async function uploadPendingImageHandler(req: Request, res: Response) {
+  try {
+    const id = String(req.params.id);
+    const imageField = req.params.field === "cccd" ? "cccd" : "bill";
+
+    // Expect multipart/form-data with `file` field (handled by multer in router)
+    const file = (req as Request & { file?: Express.Multer.File }).file;
+    if (!file) {
+      res.status(400).json({ error: "Không có file upload" });
+      return;
+    }
+
+    const result = await uploadPendingImage(id, imageField, file.path);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Upload ảnh thất bại");
+  }
+}
+
+// ─── Hạ cước (Split bills) ───────────────────────────────────────────────────
+
+export async function createSplitHandler(req: Request, res: Response) {
+  try {
+    const billId = String(req.params.id);
+    const { ky, splitAmount1 } = req.body as { ky: number; splitAmount1: number };
+    if (ky !== 1 && ky !== 2 && ky !== 3) {
+      res.status(400).json({ error: "ky phải là 1, 2 hoặc 3" });
+      return;
+    }
+    const result = await createBillSplit(billId, {
+      ky: ky as 1 | 2 | 3,
+      splitAmount1: Number(splitAmount1),
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    handleError(res, error, "Không tạo được hạ cước");
+  }
+}
+
+export async function patchSplitHandler(req: Request, res: Response) {
+  try {
+    const splitId = String(req.params.splitId);
+    const splitIdx = Number(req.params.splitIdx);
+    if (splitIdx !== 1 && splitIdx !== 2) {
+      res.status(400).json({ error: "splitIdx phải là 1 hoặc 2" });
+      return;
+    }
+    const changes = (req.body ?? {}) as Record<string, unknown>;
+    const result = await patchSplitPeriod(splitId, splitIdx as 1 | 2, changes);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Cập nhật split thất bại");
+  }
+}
+
+export async function cancelSplitHandler(req: Request, res: Response) {
+  try {
+    const splitId = String(req.params.splitId);
+    const result = await cancelBillSplit(splitId);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Hủy tách mã thất bại");
+  }
+}
+
+// ─── Static file helper for pending images ───────────────────────────────────
+
+export function servePendingImageHandler(req: Request, res: Response) {
+  const filename = req.params.filename;
+  if (!filename || filename.includes("..")) {
+    res.status(400).json({ error: "Invalid filename" });
+    return;
+  }
+  const filePath = path.join(process.cwd(), "uploads", "pending", String(filename));
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: "File not found" });
+    return;
+  }
+  res.sendFile(filePath);
 }

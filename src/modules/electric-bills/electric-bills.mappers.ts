@@ -5,15 +5,18 @@ import type { RefundFeeRuleDto, RefundLineStateDto } from "@/types/electric-bill
 export function serializeRefundLineStateDoc(doc: {
   billId: string;
   ky: number;
+  splitPart?: number;
   agencyName: string;
   status?: string;
   phiPct?: number | null;
   daHoan?: number;
   updatedAt?: Date;
 }): RefundLineStateDto {
+  const sp = doc.splitPart === 1 || doc.splitPart === 2 ? doc.splitPart : 0;
   return {
     billId: doc.billId,
     ky: doc.ky as 1 | 2 | 3,
+    splitPart: sp as 0 | 1 | 2,
     agencyName: doc.agencyName,
     status: doc.status ?? "",
     phiPct: doc.phiPct === undefined || doc.phiPct === null ? null : doc.phiPct,

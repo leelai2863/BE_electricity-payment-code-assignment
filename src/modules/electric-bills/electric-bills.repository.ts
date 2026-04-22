@@ -5,6 +5,7 @@ import { AssignedCode } from "@/models/AssignedCode";
 import { VoucherCode } from "@/models/VoucherCode";
 import { RefundFeeRule } from "@/models/RefundFeeRule";
 import { RefundLineState } from "@/models/RefundLineState";
+import { SplitBillEntry } from "@/models/SplitBillEntry";
 
 export const INVOICE_LIST_PROJECTION = {
   customerCode: 1,
@@ -142,8 +143,8 @@ export async function deleteRefundFeeRuleById(id: string) {
   return RefundFeeRule.findByIdAndDelete(id).exec();
 }
 
-export async function findRefundLineStateOne(billId: string, ky: number) {
-  return RefundLineState.findOne({ billId, ky }).lean();
+export async function findRefundLineStateOne(billId: string, ky: number, splitPart: 0 | 1 | 2 = 0) {
+  return RefundLineState.findOne({ billId, ky, splitPart }).lean();
 }
 
 export async function upsertRefundLineStateDoc(
@@ -154,11 +155,12 @@ export async function upsertRefundLineStateDoc(
     status: string;
     phiPct: number | null;
     daHoan: number;
-  }
+  },
+  splitPart: 0 | 1 | 2 = 0
 ) {
   return RefundLineState.findOneAndUpdate(
-    { billId, ky },
-    { $set: data },
+    { billId, ky, splitPart },
+    { $set: { ...data, splitPart } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   ).exec();
 }
@@ -263,4 +265,131 @@ export function newObjectId(value?: string) {
   return value && mongoose.isValidObjectId(value)
     ? new mongoose.Types.ObjectId(value)
     : new mongoose.Types.ObjectId();
+}
+
+// ─── Mã treo (Pending bills) ────────────────────────────────────────────────
+
+export async function findPendingBills() {
+  return ElectricBillRecord.find({ isPending: true })
+    .sort({ pendingAt: -1 })
+    .limit(2000)
+    .lean();
+}
+
+export async function setPendingBill(id: string, note?: string) {
+  return ElectricBillRecord.findByIdAndUpdate(
+    id,
+    {
+      $set: {
+        isPending: true,
+        pendingAt: new Date(),
+        pendingNote: note ?? null,
+        pendingResolvedAt: null,
+      },
+    },
+    { new: true }
+  ).lean();
+}
+
+export async function resolvePendingBill(id: string) {
+  return ElectricBillRecord.findByIdAndUpdate(
+    id,
+    { $set: { isPending: false, pendingResolvedAt: new Date() } },
+    { new: true }
+  ).lean();
+}
+
+export async function updatePendingBillImages(
+  id: string,
+  updates: { pendingBillImagePath?: string | null; pendingCccdImagePath?: string | null }
+) {
+  return ElectricBillRecord.findByIdAndUpdate(id, { $set: updates }, { new: true }).lean();
+}
+
+// ─── Split bills (Hạ cước) ──────────────────────────────────────────────────
+
+type SplitPeriodData = {
+  amount: number;
+};
+
+export async function createSplitBillEntry(data: {
+  originalBillId: string;
+  originalKy: 1 | 2 | 3;
+  customerCode: string;
+  monthLabel: string;
+  month: number;
+  year: number;
+  originalAmount: number;
+  split1: SplitPeriodData;
+  split2: SplitPeriodData;
+}) {
+  return SplitBillEntry.create({ ...data, status: "active" });
+}
+
+export async function findActiveSplitsByBillIds(billIds: string[]) {
+  if (billIds.length === 0) return [];
+  return SplitBillEntry.find({ originalBillId: { $in: billIds }, status: "active" }).lean();
+}
+
+export async function findSplitBillEntryById(splitId: string) {
+  if (!mongoose.isValidObjectId(splitId)) return null;
+  return SplitBillEntry.findById(splitId).exec();
+}
+
+export async function patchSplitPeriodFields(
+  splitId: string,
+  splitIdx: 1 | 2,
+  changes: Record<string, unknown>
+) {
+  const prefix = splitIdx === 1 ? "split1" : "split2";
+  const update: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(changes)) {
+    update[`${prefix}.${k}`] = v;
+  }
+  return SplitBillEntry.findByIdAndUpdate(splitId, { $set: update }, { new: true }).exec();
+}
+
+export async function resolveSplitBillEntry(splitId: string) {
+  return SplitBillEntry.findByIdAndUpdate(
+    splitId,
+    { $set: { status: "resolved", resolvedAt: new Date() } },
+    { new: true }
+  ).exec();
+}
+
+export async function cancelSplitBillEntry(splitId: string) {
+  return SplitBillEntry.findByIdAndUpdate(
+    splitId,
+    { $set: { status: "cancelled", resolvedAt: new Date() } },
+    { new: true }
+  ).exec();
+}
+
+export async function findActiveSplitsByOriginalBill(originalBillId: string) {
+  return SplitBillEntry.find({ originalBillId, status: "active" }).lean();
+}
+
+/** Các tách mã đã kết thúc — dùng tạo dòng Hoàn tiền cho 2 mã con */
+export async function findResolvedSplitEntriesForQueue(limit = 5000) {
+  return SplitBillEntry.find({ status: "resolved" })
+    .sort({ resolvedAt: -1 })
+    .limit(limit)
+    .lean();
+}
+
+let refundLineStateIndexMigrated = false;
+/** Một lần: bỏ index cũ billId+ky, gán splitPart:0, sync index mới */
+export async function ensureRefundLineStateSplitPartIndex() {
+  if (refundLineStateIndexMigrated) return;
+  try {
+    await RefundLineState.collection.dropIndex("billId_1_ky_1");
+  } catch {
+    // index không tồn tại hoặc đã đổi tên
+  }
+  await RefundLineState.updateMany(
+    { $or: [{ splitPart: { $exists: false } }, { splitPart: null }] },
+    { $set: { splitPart: 0 } }
+  );
+  await RefundLineState.syncIndexes();
+  refundLineStateIndexMigrated = true;
 }

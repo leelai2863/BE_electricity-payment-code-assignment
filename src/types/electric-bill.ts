@@ -92,6 +92,8 @@ export type RefundFeeRuleDto = {
 export type RefundLineStateDto = {
   billId: string;
   ky: 1 | 2 | 3;
+  /** 0 = dòng kỳ hóa đơn; 1|2 = mã con hạ cước */
+  splitPart?: 0 | 1 | 2;
   agencyName: string;
   status: string;
   phiPct: number | null;
@@ -128,4 +130,8 @@ export type MailQueueLineDto = {
   resolvedStatus: string | null;
   resolvedPhiPct: number | null;
   dealCompletedAt: string;
+  /** 0 hoặc không có: dòng kỳ trên hóa đơn; 1|2: mã con hạ cước (chỉ Hoàn tiền) */
+  splitPart?: 0 | 1 | 2;
+  /** true: ẩn ở trang Gửi mail / xuất Excel mail; chỉ dùng Hoàn tiền */
+  refundOnly?: boolean;
 };

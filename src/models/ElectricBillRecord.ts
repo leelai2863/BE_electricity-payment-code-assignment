@@ -50,6 +50,13 @@ const ElectricBillRecordSchema = new Schema(
     cardType: { type: String, default: null },
     billingScanJobId: { type: Schema.Types.ObjectId, ref: "BillingScanJob", default: null },
     dealCompletedAt: { type: Date, default: null, index: true },
+    /** Mã treo — đánh dấu hóa đơn bị treo (thanh toán 2 lần, trích nợ tự động...) */
+    isPending: { type: Boolean, default: false, index: true },
+    pendingAt: { type: Date, default: null },
+    pendingNote: { type: String, default: null },
+    pendingBillImagePath: { type: String, default: null },
+    pendingCccdImagePath: { type: String, default: null },
+    pendingResolvedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

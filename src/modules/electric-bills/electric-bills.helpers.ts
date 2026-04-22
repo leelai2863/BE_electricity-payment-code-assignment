@@ -79,6 +79,8 @@ export type PatchBody = {
 export type RefundLinePatchBodyItem = {
   billId: string;
   ky: 1 | 2 | 3;
+  /** 0 = dòng kỳ; 1|2 = mã con hạ cước */
+  splitPart?: 0 | 1 | 2;
   agencyName: string;
   year: number;
   month: number;

@@ -3,8 +3,9 @@ import { normalizeTextKey } from "@/lib/refund-fee-resolve";
 import { refundAnchorDateUtc } from "@/lib/refund-anchor-date";
 import type { AccountingThuChiLean } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 
-function lineKey(billId: string, ky: number) {
-  return `${billId}_k${ky}`;
+function lineKeyFromParts(billId: string, ky: number, splitPart?: 0 | 1 | 2) {
+  const sp = splitPart === 1 || splitPart === 2 ? splitPart : 0;
+  return sp === 0 ? `${billId}_k${ky}` : `${billId}_k${ky}_s${sp}`;
 }
 
 function toDdMmFromDateInHoChiMinh(d: Date): string | null {
@@ -46,7 +47,7 @@ export function mergeThuChiAllocationsIntoRefundStates(
 ): void {
   const lineByKey = new Map<string, MailQueueLineDto>();
   for (const line of lines) {
-    lineByKey.set(lineKey(line.billId, line.ky), line);
+    lineByKey.set(lineKeyFromParts(line.billId, line.ky, line.splitPart), line);
   }
 
   for (const s of resolvedLineStates) {
@@ -75,7 +76,7 @@ export function mergeThuChiAllocationsIntoRefundStates(
   const lineIndicesByAgencyDate = new Map<string, number[]>();
   for (let i = 0; i < resolvedLineStates.length; i++) {
     const st = resolvedLineStates[i];
-    const line = lineByKey.get(lineKey(st.billId, st.ky));
+    const line = lineByKey.get(lineKeyFromParts(st.billId, st.ky, st.splitPart));
     const dateKey = line ? lineDateKeyDdMm(line) : null;
     if (!dateKey) continue;
     const key = `${normalizeTextKey(st.agencyName)}__${dateKey}`;
