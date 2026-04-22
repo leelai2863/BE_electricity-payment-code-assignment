@@ -48,12 +48,13 @@ function pickLatestScanDdMm(
 async function run() {
   await connectDB();
   const splits = await SplitBillEntry.find({
-    status: "resolved",
+    status: { $in: ["active", "resolved"] },
     createdBy: "thu-chi",
   })
     .select({
       originalBillId: 1,
       originalKy: 1,
+      status: 1,
       split1: 1,
       split2: 1,
       customerCode: 1,
@@ -73,6 +74,8 @@ async function run() {
     scanned += 1;
     const billId = String(s.originalBillId ?? "");
     const ky = Number(s.originalKy ?? 0);
+    const splitStatus = String((s as { status?: unknown }).status ?? "active");
+    const isResolved = splitStatus === "resolved";
     if (!billId || !(ky >= 1 && ky <= 3)) continue;
 
     const bill = await ElectricBillRecord.findById(billId).exec();
@@ -93,36 +96,55 @@ async function run() {
       (s.split2 ?? null) as Record<string, unknown> | null,
     );
 
-    const needFix =
-      Boolean(p.assignedAgencyId || p.assignedAgencyName || p.dlGiaoName) ||
-      Boolean(latestScan && latestScan !== (p.scanDdMm ?? "")) ||
-      !Boolean(p.paymentConfirmed) ||
-      !Boolean(p.cccdConfirmed);
+    const hasAgency = Boolean(p.assignedAgencyId || p.assignedAgencyName || p.dlGiaoName);
+    const scanDrift = isResolved && Boolean(latestScan) && latestScan !== (p.scanDdMm ?? "");
+    const confirmDrift = isResolved && (!Boolean(p.paymentConfirmed) || !Boolean(p.cccdConfirmed));
+    const needFix = hasAgency || scanDrift || confirmDrift;
     if (!needFix) continue;
 
     wouldFix += 1;
     if (!apply) {
       console.info(
         `[dry-run] billId=${billId} customer=${dto.customerCode} ky=${ky} month=${dto.month}/${dto.year} ` +
-          `agency=${p.assignedAgencyName ?? "null"} -> null`,
+          `status=${splitStatus} agency=${p.assignedAgencyName ?? "null"} -> null`,
       );
       continue;
     }
 
     const nextPeriods = dto.periods.map((x, i) => {
       if (i !== idx) return x;
+      if (isResolved) {
+        return {
+          ...x,
+          scanDdMm: latestScan ?? x.scanDdMm ?? null,
+          assignedAgencyId: null,
+          assignedAgencyName: null,
+          dlGiaoName: null,
+          paymentConfirmed: true,
+          cccdConfirmed: true,
+        };
+      }
+      // Active: mã tổng chưa được chốt — chỉ detach đại lý, giữ nguyên scan/confirm.
       return {
         ...x,
-        scanDdMm: latestScan ?? x.scanDdMm ?? null,
         assignedAgencyId: null,
         assignedAgencyName: null,
         dlGiaoName: null,
-        paymentConfirmed: true,
-        cccdConfirmed: true,
       };
     });
     bill.set("periods", periodsDtoToMongoSchema(nextPeriods) as typeof bill.periods);
     bill.markModified("periods");
+
+    // Đồng bộ bill-level: nếu không còn period nào gán đại lý, xóa luôn agency ở bill.
+    const anyPeriodHasAgency = nextPeriods.some(
+      (x) => typeof x.assignedAgencyId === "string" && x.assignedAgencyId.trim()
+    );
+    if (!anyPeriodHasAgency) {
+      bill.set("assignedAgencyId", undefined);
+      bill.set("assignedAgencyName", undefined);
+      bill.set("assignedAt", undefined);
+    }
+
     await bill.save();
     saved += 1;
 

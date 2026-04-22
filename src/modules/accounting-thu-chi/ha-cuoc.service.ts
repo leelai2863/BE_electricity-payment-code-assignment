@@ -2,7 +2,9 @@ import mongoose from "mongoose";
 import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   createSplitBillEntry,
+  deleteAssignedCodeDoc,
   findActiveSplitsByOriginalBill,
+  findElectricBillById,
   findSplitBillEntryById,
   findElectricBillFullByCustomerYearMonth,
   updateSplitBillAmounts,
@@ -364,6 +366,48 @@ export async function applyHaCuocAfterThuChiSaved(params: {
   // `completeOriginalPeriodAfterSplits`, dẫn đến bill không chuyển qua archive.
   const thuChiDealCompletedAt = new Date(params.anchorDate).toISOString();
 
+  // Khi đã hạ cước: parent kỳ không còn thuộc về bất kỳ đại lý nào; chỉ giữ vai trò
+  // "mã tổng chốt sổ + đi mail" khi phần cuối cùng được xác nhận. Ghi thẳng vào DB để
+  // mọi nơi đọc (bill-level, AssignedCode…) đều thấy trạng thái đúng.
+  const detachParentAgencyForHaCuoc = async (billId: string, ky: 1 | 2 | 3) => {
+    const doc = await findElectricBillById(billId);
+    if (!doc) return;
+    const periods = Array.isArray(doc.periods) ? [...doc.periods] : [];
+    const idx = periods.findIndex((p) => Number(p?.ky) === ky);
+    if (idx < 0) return;
+    const cur = periods[idx] as unknown as Record<string, unknown>;
+    const hadAgency = Boolean(cur.assignedAgencyId || cur.assignedAgencyName || cur.dlGiaoName);
+    if (!hadAgency) return;
+    const amt = typeof cur.amount === "number" ? Math.trunc(cur.amount) : null;
+    periods[idx] = {
+      ...cur,
+      assignedAgencyId: null,
+      assignedAgencyName: null,
+      dlGiaoName: null,
+    } as (typeof doc.periods)[number];
+    doc.set("periods", periods as typeof doc.periods);
+    doc.markModified("periods");
+    // Đồng bộ bill-level: tách khỏi đại lý (nếu đại lý gốc chỉ gán vào kỳ này).
+    const stillAssigned = periods.some(
+      (p) => p && typeof (p as { assignedAgencyId?: string | null }).assignedAgencyId === "string" &&
+        String((p as { assignedAgencyId?: string | null }).assignedAgencyId ?? "").trim()
+    );
+    if (!stillAssigned) {
+      doc.set("assignedAgencyId", undefined);
+      doc.set("assignedAgencyName", undefined);
+      doc.set("assignedAt", undefined);
+    }
+    await doc.save();
+    // Bỏ AssignedCode của phần gốc (đại lý không còn "cầm" số này nữa).
+    if (amt != null && Number.isFinite(amt)) {
+      try {
+        await deleteAssignedCodeDoc(doc.customerCode, amt, doc.year, doc.month);
+      } catch {
+        /* non-blocking */
+      }
+    }
+  };
+
   if (resolved.mode === "create") {
     let splitId: string | null = null;
     try {
@@ -403,6 +447,7 @@ export async function applyHaCuocAfterThuChiSaved(params: {
         dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
         dealCompletedAt: thuChiDealCompletedAt,
       });
+      await detachParentAgencyForHaCuoc(resolved.billId, resolved.ky);
       return buildHaCuocContext(resolved, chi, splitId, false);
     } catch (err) {
       if (splitId) {
@@ -418,7 +463,8 @@ export async function applyHaCuocAfterThuChiSaved(params: {
 
   // resolveExisting: Thu chi đợt 2 trả nốt phần còn lại (split2). Chốt luôn split2 để
   // khi cả 2 split đều có dealCompletedAt, parent kỳ sẽ được đóng và bill rời khỏi
-  // "chưa duyệt" qua archive.
+  // "chưa duyệt" qua archive. Cũng detach parent agency nếu split cũ chưa dọn.
+  await detachParentAgencyForHaCuoc(resolved.billId, resolved.ky);
   await patchSplitPeriod(resolved.splitId, 2, {
     paymentConfirmed: true,
     cccdConfirmed: true,
