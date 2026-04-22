@@ -11,7 +11,8 @@
     "docker:seed": "docker exec giaodich-backend sh -c \"cd /app && npx tsx scripts/seed-vgreen-electric-bills.ts && npx tsx scripts/seed-voucher-codes.ts\"",
     "docker:prod:up": "docker compose -f docker-compose.prod.yml up -d --build",
     "docker:prod:down": "docker compose -f docker-compose.prod.yml down",
-    "migrate:normalize-evn-period-slots": "tsx scripts/normalize-evn-period-slots.ts"
+    "migrate:normalize-evn-period-slots": "tsx scripts/normalize-evn-period-slots.ts",
+    "test:ha-cuoc": "tsx scripts/smoke-ha-cuoc-unit.ts"
   },
   "dependencies": {
     "@core-x/shared-logger": "file:./packages/shared-logger",

@@ -11,6 +11,7 @@ import {
   listThuChi,
   listThuChiBankCatalog,
   listThuChiSourceCatalog,
+  previewHaCuocFromQuery,
   removeThuChi,
   updateThuChi,
   updateThuChiBankCatalog,
@@ -27,6 +28,26 @@ function handleError(res: Response, error: unknown, fallbackMessage: string) {
   }
   const message = error instanceof Error ? error.message : fallbackMessage;
   res.status(500).json({ error: message });
+}
+
+export async function previewHaCuocHandler(req: Request, res: Response) {
+  try {
+    let customerScope: string | null = null;
+    try {
+      customerScope = requiredAgencyScopeIdForCustomer(req);
+    } catch {
+      res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
+      return;
+    }
+    if (customerScope) {
+      res.status(403).json({ error: "Tài khoản đại lý không được xem preview Hạ Cước." });
+      return;
+    }
+    const result = await previewHaCuocFromQuery(req.query as Record<string, unknown>);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error, "Preview Hạ Cước thất bại");
+  }
 }
 
 export async function listThuChiHandler(req: Request, res: Response) {

@@ -9,6 +9,24 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export const HA_CUOC_SOURCE_DISPLAY = "Hạ Cước";
+export const HA_CUOC_SOURCE_KIND = "HA_CUOC";
+
+export async function getSourceCatalogEntryById(id: string): Promise<{
+  _id: mongoose.Types.ObjectId;
+  sourceDisplay: string;
+  system: boolean;
+} | null> {
+  if (!mongoose.isValidObjectId(id)) return null;
+  const row = await UserSourcePreference.findById(id).lean().exec();
+  if (!row) return null;
+  return {
+    _id: row._id as mongoose.Types.ObjectId,
+    sourceDisplay: String(row.sourceDisplay ?? ""),
+    system: Boolean(row.system),
+  };
+}
+
 export async function listSourceCatalog(params: { q?: string; limit: number }): Promise<
   Array<{
     _id: mongoose.Types.ObjectId;
@@ -16,6 +34,8 @@ export async function listSourceCatalog(params: { q?: string; limit: number }): 
     sourceNormalized: string;
     usageCount: number;
     lastUsedAt: Date;
+    kind: string | null;
+    system: boolean;
   }>
 > {
   const limit = Math.min(50, Math.max(1, Math.trunc(params.limit)));
@@ -43,6 +63,8 @@ export async function listSourceCatalog(params: { q?: string; limit: number }): 
     sourceNormalized: String(row.sourceNormalized ?? ""),
     usageCount: typeof row.usageCount === "number" ? row.usageCount : 1,
     lastUsedAt: row.lastUsedAt instanceof Date ? row.lastUsedAt : new Date(),
+    kind: typeof row.kind === "string" && row.kind.trim() ? row.kind.trim() : null,
+    system: Boolean(row.system),
   }));
 }
 
@@ -53,11 +75,37 @@ export async function upsertSourceCatalog(sourceDisplayRaw: string): Promise<voi
   if (!sourceNormalized) return;
 
   const now = new Date();
+  const isHaCuoc = sourceNormalized === normalizeSourceForDedupe(HA_CUOC_SOURCE_DISPLAY);
   await UserSourcePreference.updateOne(
     { sourceNormalized },
     {
-      $set: { sourceDisplay, lastUsedAt: now },
+      $set: {
+        sourceDisplay,
+        lastUsedAt: now,
+        ...(isHaCuoc ? { kind: HA_CUOC_SOURCE_KIND, system: true } : {}),
+      },
       $inc: { usageCount: 1 },
+    },
+    { upsert: true }
+  );
+}
+
+/** Upsert nguồn Hạ Cước hệ thống (chạy seed/migration). */
+export async function upsertHaCuocSystemSource(): Promise<void> {
+  const sourceDisplay = HA_CUOC_SOURCE_DISPLAY;
+  const sourceNormalized = normalizeSourceForDedupe(sourceDisplay);
+  const now = new Date();
+  await UserSourcePreference.updateOne(
+    { sourceNormalized },
+    {
+      $set: {
+        sourceDisplay,
+        sourceNormalized,
+        kind: HA_CUOC_SOURCE_KIND,
+        system: true,
+        lastUsedAt: now,
+      },
+      $setOnInsert: { usageCount: 1 },
     },
     { upsert: true }
   );
@@ -65,6 +113,9 @@ export async function upsertSourceCatalog(sourceDisplayRaw: string): Promise<voi
 
 export async function updateSourceCatalogById(id: string, sourceDisplayRaw: string): Promise<boolean> {
   if (!mongoose.isValidObjectId(id)) return false;
+  const current = await UserSourcePreference.findById(id).lean().exec();
+  if (current?.system) return false;
+
   const sourceDisplay = sourceDisplayRaw.trim().slice(0, 120);
   if (!sourceDisplay) return false;
   const sourceNormalized = normalizeSourceForDedupe(sourceDisplay);
@@ -72,13 +123,13 @@ export async function updateSourceCatalogById(id: string, sourceDisplayRaw: stri
 
   const existing = await UserSourcePreference.findOne({ sourceNormalized }).lean().exec();
   if (existing && String(existing._id) !== id) {
-    const current = await UserSourcePreference.findById(id).lean().exec();
-    if (current) {
-      const totalUsage = (Number(existing.usageCount) || 0) + (Number(current.usageCount) || 0);
+    const selfRow = await UserSourcePreference.findById(id).lean().exec();
+    if (selfRow) {
+      const totalUsage = (Number(existing.usageCount) || 0) + (Number(selfRow.usageCount) || 0);
       const lastUsedAt = new Date(
         Math.max(
           new Date(existing.lastUsedAt ?? 0).getTime(),
-          new Date(current.lastUsedAt ?? 0).getTime(),
+          new Date(selfRow.lastUsedAt ?? 0).getTime(),
         ),
       );
       await UserSourcePreference.updateOne(
@@ -103,6 +154,8 @@ export async function updateSourceCatalogById(id: string, sourceDisplayRaw: stri
 
 export async function deleteSourceCatalogById(id: string): Promise<boolean> {
   if (!mongoose.isValidObjectId(id)) return false;
+  const cur = await UserSourcePreference.findById(id).lean().exec();
+  if (cur?.system) return false;
   const deleted = await UserSourcePreference.findByIdAndDelete(id).lean().exec();
   return Boolean(deleted);
 }

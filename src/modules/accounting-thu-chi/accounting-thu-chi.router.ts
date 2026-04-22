@@ -9,6 +9,7 @@ import {
   listThuChiHandler,
   listThuChiBankCatalogHandler,
   listThuChiSourceCatalogHandler,
+  previewHaCuocHandler,
   removeThuChiHandler,
   updateThuChiBankCatalogHandler,
   updateThuChiSourceCatalogHandler,
@@ -26,6 +27,7 @@ router.get("/source-catalog", listThuChiSourceCatalogHandler);
 router.post("/source-catalog", createThuChiSourceCatalogHandler);
 router.patch("/source-catalog/:id", updateThuChiSourceCatalogHandler);
 router.delete("/source-catalog/:id", deleteThuChiSourceCatalogHandler);
+router.get("/ha-cuoc/preview", previewHaCuocHandler);
 router.get("/:id", getThuChiByIdHandler);
 router.post("/", createThuChiHandler);
 router.patch("/:id", updateThuChiHandler);

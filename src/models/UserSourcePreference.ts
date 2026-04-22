@@ -8,6 +8,9 @@ const UserSourcePreferenceSchema = new Schema(
     sourceNormalized: { type: String, required: true, trim: true },
     usageCount: { type: Number, default: 1, min: 1 },
     lastUsedAt: { type: Date, default: () => new Date(), index: true },
+    /** HA_CUOC = nguồn hệ thống Hạ Cước (Thu chi); null = nguồn thường */
+    kind: { type: String, default: null, trim: true, index: true },
+    system: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

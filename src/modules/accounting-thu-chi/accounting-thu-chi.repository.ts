@@ -5,6 +5,19 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export type HaCuocContextLean = {
+  kind: "HA_CUOC";
+  customerCode: string;
+  targetBillId: string;
+  targetKy: 1 | 2 | 3;
+  targetYear: number;
+  targetMonth: number;
+  originalAmount: number;
+  splitAmount1: number;
+  createdSplitEntryId?: string | null;
+  resolvedExistingSplit?: boolean;
+};
+
 export type AccountingThuChiLean = {
   _id: mongoose.Types.ObjectId;
   txnDate: Date;
@@ -18,6 +31,7 @@ export type AccountingThuChiLean = {
   linkedAgencyId?: mongoose.Types.ObjectId | null;
   linkedAgencyCode?: string | null;
   linkedAgencyName?: string | null;
+  haCuocContext?: HaCuocContextLean | null;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -103,19 +117,28 @@ export async function findAccountingThuChiById(id: string): Promise<AccountingTh
   return doc as AccountingThuChiLean | null;
 }
 
-export async function createAccountingThuChiDoc(input: {
-  txnDate: Date;
-  effectivePaymentDate: Date | null;
-  description: string;
-  source: string;
-  bank: string;
-  thu: number | null;
-  chi: number | null;
-  notes: string;
-  linkedAgencyId: mongoose.Types.ObjectId | null;
-  linkedAgencyCode: string | null;
-  linkedAgencyName: string | null;
-}) {
+export async function createAccountingThuChiDoc(
+  input: {
+    _id?: mongoose.Types.ObjectId;
+    txnDate: Date;
+    effectivePaymentDate: Date | null;
+    description: string;
+    source: string;
+    bank: string;
+    thu: number | null;
+    chi: number | null;
+    notes: string;
+    linkedAgencyId: mongoose.Types.ObjectId | null;
+    linkedAgencyCode: string | null;
+    linkedAgencyName: string | null;
+    haCuocContext?: HaCuocContextLean | null;
+  },
+  opts?: { session?: mongoose.ClientSession }
+) {
+  if (opts?.session) {
+    const arr = await AccountingThuChiEntry.create([input], { session: opts.session });
+    return arr[0]!;
+  }
   return AccountingThuChiEntry.create(input);
 }
 
@@ -133,13 +156,24 @@ export async function updateAccountingThuChiDoc(
     linkedAgencyId: mongoose.Types.ObjectId | null;
     linkedAgencyCode: string | null;
     linkedAgencyName: string | null;
-  }>
+    haCuocContext: HaCuocContextLean | null;
+  }>,
+  opts?: { session?: mongoose.ClientSession }
 ) {
-  return AccountingThuChiEntry.findByIdAndUpdate(id, { $set: input }, { new: true }).lean();
+  return AccountingThuChiEntry.findByIdAndUpdate(id, { $set: input }, { new: true, session: opts?.session }).lean();
 }
 
-export async function deleteAccountingThuChiDoc(id: string) {
-  return AccountingThuChiEntry.findByIdAndDelete(id).lean();
+export async function deleteAccountingThuChiDoc(id: string, opts?: { session?: mongoose.ClientSession }) {
+  return AccountingThuChiEntry.findByIdAndDelete(id, { session: opts?.session }).lean();
+}
+
+/** Các dòng Thu chi khác đang trỏ cùng một SplitBillEntry (đợt 2 thanh toán). */
+export async function countOtherThuChiLinkedToSplit(splitEntryId: string, excludeEntryId: string): Promise<number> {
+  if (!mongoose.isValidObjectId(splitEntryId) || !mongoose.isValidObjectId(excludeEntryId)) return 0;
+  return AccountingThuChiEntry.countDocuments({
+    "haCuocContext.createdSplitEntryId": splitEntryId,
+    _id: { $ne: new mongoose.Types.ObjectId(excludeEntryId) },
+  });
 }
 
 /** Dòng có Chi > 0 và neo đại lý — phục vụ phân bổ Hoàn tiền */

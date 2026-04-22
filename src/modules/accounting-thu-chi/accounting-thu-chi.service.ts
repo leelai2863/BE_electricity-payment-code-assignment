@@ -21,10 +21,24 @@ import {
 } from "@/modules/accounting-thu-chi/user-bank-preference.repository";
 import {
   deleteSourceCatalogById,
+  getSourceCatalogEntryById,
   listSourceCatalog,
   updateSourceCatalogById,
+  upsertHaCuocSystemSource,
   upsertSourceCatalog,
 } from "@/modules/accounting-thu-chi/user-source-preference.repository";
+import {
+  applyHaCuocAfterThuChiSaved,
+  formatAnchorDdMmHoChiMinh,
+  isHaCuocSource,
+  parseCustomerCodeFromDescription,
+  previewHaCuoc,
+  revertHaCuocContext,
+  updateHaCuocSplitAmountsIfNeeded,
+  vnCalendarYearMonth,
+} from "@/modules/accounting-thu-chi/ha-cuoc.service";
+import { patchSplitPeriod } from "@/modules/electric-bills/electric-bills.service";
+import type { HaCuocContextLean } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 
 /** Tạo mới: bỏ trống → null; giá trị không phải số hợp lệ → 400 */
 function parseMoneyCreate(raw: unknown, fieldLabel: string): number | null {
@@ -69,6 +83,22 @@ function resolveThuChiActorId(raw?: string | null): mongoose.Types.ObjectId {
   const s = typeof raw === "string" ? raw.trim() : "";
   if (s && mongoose.isValidObjectId(s)) return new mongoose.Types.ObjectId(s);
   return new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
+}
+
+function serializeHaCuocContext(ctx: HaCuocContextLean | null | undefined) {
+  if (!ctx) return null;
+  return {
+    kind: ctx.kind,
+    customerCode: ctx.customerCode,
+    targetBillId: ctx.targetBillId,
+    targetKy: ctx.targetKy,
+    targetYear: ctx.targetYear,
+    targetMonth: ctx.targetMonth,
+    originalAmount: ctx.originalAmount,
+    splitAmount1: ctx.splitAmount1,
+    createdSplitEntryId: ctx.createdSplitEntryId ?? null,
+    resolvedExistingSplit: Boolean(ctx.resolvedExistingSplit),
+  };
 }
 
 async function resolveAgencyLinkForSource(sourceRaw: string): Promise<{
@@ -171,6 +201,7 @@ export async function listThuChi(query: Record<string, unknown>, scope?: ThuChiR
       linkedAgencyId: row.linkedAgencyId ? String(row.linkedAgencyId) : null,
       linkedAgencyCode: row.linkedAgencyCode ?? null,
       linkedAgencyName: row.linkedAgencyName ?? null,
+      haCuocContext: serializeHaCuocContext(row.haCuocContext),
       createdAt: row.createdAt?.toISOString() ?? null,
       updatedAt: row.updatedAt?.toISOString() ?? null,
     }));
@@ -208,6 +239,7 @@ export async function getThuChiById(id: string, scope?: ThuChiReadScope) {
       linkedAgencyId: row.linkedAgencyId ? String(row.linkedAgencyId) : null,
       linkedAgencyCode: row.linkedAgencyCode ?? null,
       linkedAgencyName: row.linkedAgencyName ?? null,
+      haCuocContext: serializeHaCuocContext(row.haCuocContext),
       createdAt: row.createdAt?.toISOString() ?? null,
       updatedAt: row.updatedAt?.toISOString() ?? null,
     },
@@ -232,26 +264,75 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
   const chi = parseMoneyCreate(body.chi, "Chi");
   assertPositiveThuOrChi(thu ?? 0, chi ?? 0);
 
-  const link = await resolveAgencyLinkForSource(source);
-  if (!link.linkedAgencyId && source.trim()) {
-    await upsertSourceCatalog(source.trim());
+  const sourceTrim = source.trim();
+  let link = await resolveAgencyLinkForSource(sourceTrim);
+  if (isHaCuocSource(sourceTrim)) {
+    link = { linkedAgencyId: null, linkedAgencyCode: null, linkedAgencyName: null };
+    await upsertHaCuocSystemSource();
+  } else if (!link.linkedAgencyId && sourceTrim) {
+    await upsertSourceCatalog(sourceTrim);
   }
 
   try {
-    const doc = await createAccountingThuChiDoc({
-      txnDate,
-      effectivePaymentDate,
-      description: description.trim(),
-      source: source.trim(),
-      bank: bank.trim(),
-      thu,
-      chi,
-      notes: notes.trim(),
-      linkedAgencyId: link.linkedAgencyId,
-      linkedAgencyCode: link.linkedAgencyCode,
-      linkedAgencyName: link.linkedAgencyName,
-    });
-    const row = doc.toObject() as Record<string, unknown>;
+    let row: Record<string, unknown>;
+    if (isHaCuocSource(sourceTrim)) {
+      const preId = new mongoose.Types.ObjectId();
+      const anchor = effectivePaymentDate ?? txnDate;
+      let haCtx: HaCuocContextLean;
+      try {
+        haCtx = (await applyHaCuocAfterThuChiSaved({
+          entryId: String(preId),
+          source: sourceTrim,
+          description: description.trim(),
+          chi,
+          thu,
+          anchorDate: anchor,
+        })) as HaCuocContextLean;
+      } catch (applyErr) {
+        throw applyErr;
+      }
+      try {
+        await createAccountingThuChiDoc({
+          _id: preId,
+          txnDate,
+          effectivePaymentDate,
+          description: description.trim(),
+          source: sourceTrim,
+          bank: bank.trim(),
+          thu,
+          chi,
+          notes: notes.trim(),
+          linkedAgencyId: link.linkedAgencyId,
+          linkedAgencyCode: link.linkedAgencyCode,
+          linkedAgencyName: link.linkedAgencyName,
+          haCuocContext: haCtx,
+        });
+      } catch (saveErr) {
+        try {
+          await revertHaCuocContext(haCtx, String(preId));
+        } catch {
+          /* ignore */
+        }
+        throw saveErr;
+      }
+      const reloaded = await findAccountingThuChiById(String(preId));
+      row = (reloaded ?? {}) as Record<string, unknown>;
+    } else {
+      const doc = await createAccountingThuChiDoc({
+        txnDate,
+        effectivePaymentDate,
+        description: description.trim(),
+        source: sourceTrim,
+        bank: bank.trim(),
+        thu,
+        chi,
+        notes: notes.trim(),
+        linkedAgencyId: link.linkedAgencyId,
+        linkedAgencyCode: link.linkedAgencyCode,
+        linkedAgencyName: link.linkedAgencyName,
+      });
+      row = (doc as { toObject?: () => Record<string, unknown> }).toObject?.() ?? (doc as unknown as Record<string, unknown>);
+    }
     const oid = row._id as mongoose.Types.ObjectId;
     await writeAuditLog({
       actorUserId: resolveThuChiActorId(ctx?.actorUserId),
@@ -277,6 +358,7 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
     });
     return { data: serializeDoc(row), source: "mongodb" as const };
   } catch (error) {
+    if (error instanceof ServiceError) throw error;
     throw new ServiceError(500, getErrorMessage(error, "Không lưu được"));
   }
 }
@@ -295,6 +377,7 @@ function serializeDoc(row: Record<string, unknown>) {
     linkedAgencyId: row.linkedAgencyId ? String(row.linkedAgencyId) : null,
     linkedAgencyCode: row.linkedAgencyCode ? String(row.linkedAgencyCode) : null,
     linkedAgencyName: row.linkedAgencyName ? String(row.linkedAgencyName) : null,
+    haCuocContext: serializeHaCuocContext(row.haCuocContext as HaCuocContextLean | null | undefined),
   };
 }
 
@@ -336,15 +419,125 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
 
   const sourceForLink =
     typeof patch.source === "string" ? patch.source : String(existing.source ?? "").trim();
-  const link = await resolveAgencyLinkForSource(sourceForLink);
+  let link = await resolveAgencyLinkForSource(sourceForLink);
+  if (isHaCuocSource(sourceForLink)) {
+    link = { linkedAgencyId: null, linkedAgencyCode: null, linkedAgencyName: null };
+    await upsertHaCuocSystemSource();
+  } else if (!link.linkedAgencyId && sourceForLink.trim()) {
+    await upsertSourceCatalog(sourceForLink.trim());
+  }
   patch.linkedAgencyId = link.linkedAgencyId;
   patch.linkedAgencyCode = link.linkedAgencyCode;
   patch.linkedAgencyName = link.linkedAgencyName;
-  if (!link.linkedAgencyId && sourceForLink.trim()) {
-    await upsertSourceCatalog(sourceForLink.trim());
+
+  const mergedSource = sourceForLink.trim();
+  const mergedDesc =
+    typeof patch.description === "string" ? String(patch.description).trim() : String(existing.description ?? "").trim();
+  const mergedTxn = (patch.txnDate as Date | undefined) ?? existing.txnDate;
+  const mergedEff =
+    patch.effectivePaymentDate !== undefined ? (patch.effectivePaymentDate as Date | null) : existing.effectivePaymentDate;
+  const anchorDate = (mergedEff ?? mergedTxn) instanceof Date ? (mergedEff ?? mergedTxn)! : mergedTxn;
+  const oldHa = existing.haCuocContext ?? null;
+  const newWantsHa = isHaCuocSource(mergedSource);
+
+  if (oldHa?.resolvedExistingSplit) {
+    const code = parseCustomerCodeFromDescription(mergedDesc);
+    if (body.chi !== undefined) {
+      throw new ServiceError(409, "Không đổi số tiền Chi trên dòng đóng phần còn lại split — xóa dòng và nhập lại nếu cần.", {
+        code: "HA_CUOC_SPLIT_RESOLVED",
+      });
+    }
+    if (body.source !== undefined && !newWantsHa) {
+      throw new ServiceError(409, "Không đổi nguồn khỏi Hạ Cước trên dòng đã gắn split đợt 2.", { code: "HA_CUOC_SPLIT_ROW_LOCKED" });
+    }
+    if (body.description !== undefined && code !== oldHa.customerCode) {
+      throw new ServiceError(400, "Không đổi mã khách hàng trên dòng đóng split đợt 2.", { code: "HA_CUOC_SPLIT_ROW_LOCKED" });
+    }
+    if (body.txnDate !== undefined || body.effectivePaymentDate !== undefined) {
+      const oldYm = vnCalendarYearMonth((existing.effectivePaymentDate ?? existing.txnDate) as Date);
+      const newYm = vnCalendarYearMonth(anchorDate);
+      if (oldYm.year !== newYm.year || oldYm.month !== newYm.month) {
+        throw new ServiceError(409, "Không đổi tháng hạch toán trên dòng đóng split đợt 2.", { code: "HA_CUOC_SPLIT_ROW_LOCKED" });
+      }
+    }
   }
 
   try {
+    if (oldHa && !newWantsHa) {
+      await revertHaCuocContext(oldHa, id);
+      patch.haCuocContext = null;
+    } else if (!oldHa && newWantsHa) {
+      const haCtx = (await applyHaCuocAfterThuChiSaved({
+        entryId: id,
+        source: mergedSource,
+        description: mergedDesc,
+        chi: typeof mergedChi === "number" ? mergedChi : null,
+        thu: typeof mergedThu === "number" ? mergedThu : null,
+        anchorDate,
+      })) as HaCuocContextLean;
+      patch.haCuocContext = haCtx;
+    } else if (oldHa && newWantsHa) {
+      if (oldHa.resolvedExistingSplit) {
+        /* chỉ patch thường (bank/notes/…) — giữ nguyên haCuocContext */
+      } else {
+        const prevYm = vnCalendarYearMonth((existing.effectivePaymentDate ?? existing.txnDate) as Date);
+        const nextYm = vnCalendarYearMonth(anchorDate);
+        const prevCode = oldHa.customerCode;
+        const nextCode = parseCustomerCodeFromDescription(mergedDesc);
+        const sameTarget =
+          nextCode === prevCode && prevYm.year === nextYm.year && prevYm.month === nextYm.month && oldHa.targetBillId;
+
+        const onlyChiAmongHaFields =
+          body.chi !== undefined &&
+          body.description === undefined &&
+          body.source === undefined &&
+          body.txnDate === undefined &&
+          body.effectivePaymentDate === undefined;
+
+        const onlyDateSameMonth =
+          (body.txnDate !== undefined || body.effectivePaymentDate !== undefined) &&
+          body.chi === undefined &&
+          body.description === undefined &&
+          body.source === undefined &&
+          sameTarget &&
+          prevYm.year === nextYm.year &&
+          prevYm.month === nextYm.month;
+
+        if (sameTarget && onlyChiAmongHaFields && typeof mergedChi === "number") {
+          const nextCtx = await updateHaCuocSplitAmountsIfNeeded({
+            ctx: oldHa,
+            newChi: mergedChi,
+            anchorDate,
+          });
+          patch.haCuocContext = nextCtx;
+        } else if (sameTarget && onlyDateSameMonth && oldHa.createdSplitEntryId) {
+          await patchSplitPeriod(oldHa.createdSplitEntryId, 1, {
+            scanDdMm: formatAnchorDdMmHoChiMinh(anchorDate),
+          });
+        } else if (
+          mergedDesc === String(existing.description ?? "").trim() &&
+          mergedSource === String(existing.source ?? "").trim() &&
+          mergedChi === existing.chi &&
+          mergedThu === existing.thu &&
+          prevYm.year === nextYm.year &&
+          prevYm.month === nextYm.month
+        ) {
+          /* không đổi nghiệp vụ Hạ Cước */
+        } else {
+          await revertHaCuocContext(oldHa, id);
+          const haCtx = (await applyHaCuocAfterThuChiSaved({
+            entryId: id,
+            source: mergedSource,
+            description: mergedDesc,
+            chi: typeof mergedChi === "number" ? mergedChi : null,
+            thu: typeof mergedThu === "number" ? mergedThu : null,
+            anchorDate,
+          })) as HaCuocContextLean;
+          patch.haCuocContext = haCtx;
+        }
+      }
+    }
+
     const updated = await updateAccountingThuChiDoc(id, patch as Parameters<typeof updateAccountingThuChiDoc>[1]);
     if (!updated) throw new ServiceError(404, "Không tìm thấy bản ghi");
     const changeParts: string[] = [];
@@ -378,10 +571,34 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
   }
 }
 
+export async function previewHaCuocFromQuery(query: Record<string, unknown>) {
+  await ensureDb();
+  const customerCode = typeof query.customerCode === "string" ? query.customerCode.trim() : "";
+  const amountOut = Number(query.amountOut);
+  const anchorRaw = query.anchorDate;
+  if (!customerCode) throw new ServiceError(400, "Thiếu customerCode", { code: "HA_CUOC_PREVIEW_MISSING_CODE" });
+  if (!Number.isFinite(amountOut)) {
+    throw new ServiceError(400, "amountOut không hợp lệ", { code: "HA_CUOC_PREVIEW_MISSING_AMOUNT" });
+  }
+  const anchor =
+    anchorRaw instanceof Date
+      ? anchorRaw
+      : typeof anchorRaw === "string" && anchorRaw.trim()
+        ? new Date(anchorRaw)
+        : null;
+  if (!anchor || Number.isNaN(anchor.getTime())) {
+    throw new ServiceError(400, "anchorDate không hợp lệ (ISO)", { code: "HA_CUOC_PREVIEW_MISSING_DATE" });
+  }
+  return previewHaCuoc({ customerCode, amountOut, anchorDate: anchor });
+}
+
 export async function removeThuChi(id: string, ctx?: ThuChiAuditContext) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   const snapshot = await findAccountingThuChiById(id);
+  if (snapshot?.haCuocContext) {
+    await revertHaCuocContext(snapshot.haCuocContext, id);
+  }
   const deleted = await deleteAccountingThuChiDoc(id);
   if (!deleted) throw new ServiceError(404, "Không tìm thấy bản ghi");
   await writeAuditLog({
@@ -466,6 +683,8 @@ export async function listThuChiSourceCatalog(query: Record<string, unknown>) {
           source: it.sourceDisplay,
           usageCount: Number(it.usageCount ?? 0),
           lastUsedAt: it.lastUsedAt instanceof Date ? it.lastUsedAt.toISOString() : new Date().toISOString(),
+          kind: it.kind ?? null,
+          system: Boolean(it.system),
         })),
       },
       source: "mongodb" as const,
@@ -486,6 +705,10 @@ export async function createThuChiSourceCatalog(body: Record<string, unknown>) {
 export async function updateThuChiSourceCatalog(id: string, body: Record<string, unknown>) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const cur = await getSourceCatalogEntryById(id);
+  if (cur?.system) {
+    throw new ServiceError(403, "Không được sửa nguồn hệ thống (Hạ Cước).", { code: "SOURCE_SYSTEM_LOCKED" });
+  }
   const source = typeof body.source === "string" ? body.source.trim() : "";
   if (!source) throw new ServiceError(400, "source không hợp lệ");
   const ok = await updateSourceCatalogById(id, source);
@@ -496,6 +719,10 @@ export async function updateThuChiSourceCatalog(id: string, body: Record<string,
 export async function deleteThuChiSourceCatalog(id: string) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const cur = await getSourceCatalogEntryById(id);
+  if (cur?.system) {
+    throw new ServiceError(403, "Không được xóa nguồn hệ thống (Hạ Cước).", { code: "SOURCE_SYSTEM_LOCKED" });
+  }
   const ok = await deleteSourceCatalogById(id);
   if (!ok) throw new ServiceError(404, "Không tìm thấy nguồn ngoài");
   return { ok: true, source: "mongodb" as const };

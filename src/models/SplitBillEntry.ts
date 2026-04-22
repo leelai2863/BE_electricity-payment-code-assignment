@@ -31,11 +31,15 @@ const SplitBillEntrySchema = new Schema(
     split2: { type: SplitPeriodSchema, required: true },
     status: { type: String, enum: ["active", "resolved", "cancelled"], default: "active" },
     resolvedAt: { type: Date, default: null },
+    createdBy: { type: String, enum: ["manual", "thu-chi"], default: "manual" },
+    sourceThuChiId: { type: String, default: null, index: true },
+    lockedByThuChi: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 SplitBillEntrySchema.index({ originalBillId: 1, status: 1 });
+SplitBillEntrySchema.index({ originalBillId: 1, originalKy: 1, status: 1 });
 
 export type SplitBillEntryDocument = InferSchemaType<typeof SplitBillEntrySchema> & {
   _id: mongoose.Types.ObjectId;

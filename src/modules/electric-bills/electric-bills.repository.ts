@@ -233,6 +233,17 @@ export async function findElectricBillByCustomerYearMonth(customerCode: string, 
     .lean();
 }
 
+/** Hóa đơn đầy đủ theo mã KH + tháng (dùng Hạ Cước từ Thu chi). */
+export async function findElectricBillFullByCustomerYearMonth(customerCode: string, year: number, month: number) {
+  const code = customerCode.trim();
+  if (!code) return null;
+  return ElectricBillRecord.findOne({
+    year,
+    month,
+    customerCode: { $regex: new RegExp(`^${escapeRegex(code)}$`, "i") },
+  }).exec();
+}
+
 export async function assignElectricBillIfAvailable(params: {
   billId: string;
   agencyId: string;
@@ -312,18 +323,48 @@ type SplitPeriodData = {
   amount: number;
 };
 
-export async function createSplitBillEntry(data: {
-  originalBillId: string;
-  originalKy: 1 | 2 | 3;
-  customerCode: string;
-  monthLabel: string;
-  month: number;
-  year: number;
-  originalAmount: number;
-  split1: SplitPeriodData;
-  split2: SplitPeriodData;
-}) {
-  return SplitBillEntry.create({ ...data, status: "active" });
+export async function createSplitBillEntry(
+  data: {
+    originalBillId: string;
+    originalKy: 1 | 2 | 3;
+    customerCode: string;
+    monthLabel: string;
+    month: number;
+    year: number;
+    originalAmount: number;
+    split1: SplitPeriodData & Record<string, unknown>;
+    split2: SplitPeriodData & Record<string, unknown>;
+    createdBy?: "manual" | "thu-chi";
+    sourceThuChiId?: string | null;
+    lockedByThuChi?: boolean;
+  },
+  opts?: { session?: mongoose.ClientSession }
+) {
+  const doc = {
+    ...data,
+    status: "active" as const,
+    createdBy: data.createdBy ?? "manual",
+    sourceThuChiId: data.sourceThuChiId ?? null,
+    lockedByThuChi: Boolean(data.lockedByThuChi ?? data.createdBy === "thu-chi"),
+  };
+  if (opts?.session) {
+    const arr = await SplitBillEntry.create([doc], { session: opts.session });
+    return arr[0]!;
+  }
+  return SplitBillEntry.create(doc);
+}
+
+export async function updateSplitBillAmounts(
+  splitId: string,
+  split1Amount: number,
+  split2Amount: number,
+  opts?: { session?: mongoose.ClientSession }
+) {
+  return SplitBillEntry.findByIdAndUpdate(
+    splitId,
+    { $set: { "split1.amount": split1Amount, "split2.amount": split2Amount } },
+    { new: true, session: opts?.session }
+  ).exec();
 }
 
 export async function findActiveSplitsByBillIds(billIds: string[]) {

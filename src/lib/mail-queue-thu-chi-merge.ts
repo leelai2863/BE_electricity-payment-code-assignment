@@ -58,6 +58,7 @@ export function mergeThuChiAllocationsIntoRefundStates(
   /** Danh sách từng dòng Chi theo agency + dd/mm để gán 1-1 xuống bảng Hoàn tiền. */
   const chiRowsByAgencyDate = new Map<string, number[]>();
   for (const e of chiEntries) {
+    if (e.haCuocContext != null) continue;
     const idStr = e.linkedAgencyId ? String(e.linkedAgencyId) : "";
     const nameFromDb = idStr ? (agencyCurrentNameById.get(idStr) ?? "").trim() : "";
     const name = nameFromDb || String(e.linkedAgencyName ?? "").trim();

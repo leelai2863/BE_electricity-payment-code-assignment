@@ -263,6 +263,9 @@ export async function getInvoiceList(query: Record<string, unknown>, scope?: Age
         split2: s.split2,
         status: s.status,
         resolvedAt: s.resolvedAt ? new Date(s.resolvedAt).toISOString() : null,
+        createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
+        sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
+        lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
       })),
     }));
     const serializeMs = nowMs() - serializeStarted;
@@ -429,6 +432,9 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
         split2: s.split2,
         status: String(s.status ?? "active"),
         resolvedAt: s.resolvedAt ? new Date(String(s.resolvedAt)).toISOString() : null,
+        createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
+        sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
+        lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
       })),
     }));
 
@@ -2161,6 +2167,9 @@ async function attachActiveSplitsToSerializedBill(
       split2: s.split2,
       status: s.status,
       resolvedAt: s.resolvedAt ? new Date(s.resolvedAt).toISOString() : null,
+      createdBy: (s as { createdBy?: string }).createdBy ?? "manual",
+      sourceThuChiId: (s as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
+      lockedByThuChi: Boolean((s as { lockedByThuChi?: boolean }).lockedByThuChi),
     })),
   };
 }

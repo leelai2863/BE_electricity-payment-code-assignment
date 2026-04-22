@@ -9,6 +9,7 @@ import {
   enqueueUnassignedPaymentDeadlineSync,
   parseTargetedPaymentDeadline,
 } from "@/modules/electric-bills/payment-deadline-sync.service";
+import { findSplitBillEntryById } from "@/modules/electric-bills/electric-bills.repository";
 import {
   ServiceError,
   listUnassignedBills,
@@ -32,7 +33,6 @@ import {
   markBillAsPending,
   markBillAsResolved,
   uploadPendingImage,
-  createBillSplit,
   patchSplitPeriod,
   cancelBillSplit,
 } from "./electric-bills.service";
@@ -413,22 +413,11 @@ export async function uploadPendingImageHandler(req: Request, res: Response) {
 
 // ─── Hạ cước (Split bills) ───────────────────────────────────────────────────
 
-export async function createSplitHandler(req: Request, res: Response) {
-  try {
-    const billId = String(req.params.id);
-    const { ky, splitAmount1 } = req.body as { ky: number; splitAmount1: number };
-    if (ky !== 1 && ky !== 2 && ky !== 3) {
-      res.status(400).json({ error: "ky phải là 1, 2 hoặc 3" });
-      return;
-    }
-    const result = await createBillSplit(billId, {
-      ky: ky as 1 | 2 | 3,
-      splitAmount1: Number(splitAmount1),
-    });
-    res.status(201).json(result);
-  } catch (error) {
-    handleError(res, error, "Không tạo được hạ cước");
-  }
+export async function createSplitHandler(_req: Request, res: Response) {
+  res.status(410).json({
+    error: "Tách mã thủ công đã tắt — chỉ thực hiện Hạ Cước qua trang Thu chi (nguồn «Hạ Cước»).",
+    code: "SPLIT_MANUAL_DISABLED",
+  });
 }
 
 export async function patchSplitHandler(req: Request, res: Response) {
@@ -450,6 +439,17 @@ export async function patchSplitHandler(req: Request, res: Response) {
 export async function cancelSplitHandler(req: Request, res: Response) {
   try {
     const splitId = String(req.params.splitId);
+    const ent = await findSplitBillEntryById(splitId);
+    const locked =
+      Boolean((ent as { lockedByThuChi?: boolean } | null)?.lockedByThuChi) ||
+      String((ent as { createdBy?: string } | null)?.createdBy ?? "") === "thu-chi";
+    if (locked) {
+      res.status(410).json({
+        error: "Split từ Thu chi không hủy qua API này — xóa/sửa dòng Thu chi Hạ Cước tương ứng.",
+        code: "SPLIT_THU_CHI_LOCKED",
+      });
+      return;
+    }
     const result = await cancelBillSplit(splitId);
     res.json(result);
   } catch (error) {
