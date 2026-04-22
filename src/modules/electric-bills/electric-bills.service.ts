@@ -480,6 +480,9 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
   for (const d of docs) {
     companyByBillId.set(String((d as { _id?: unknown })._id), String((d as { company?: string }).company ?? ""));
   }
+  const parentKeysWithResolvedSplit = new Set<string>(
+    resolvedSplits.map((s) => `${String(s.originalBillId)}_k${String(s.originalKy)}`)
+  );
 
   const lines: MailQueueLineDto[] = [];
   const resolvedLineStates: RefundLineStateDto[] = [];
@@ -495,6 +498,8 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
     const bill = serializeElectricBill(d as Record<string, unknown>);
     for (const p of bill.periods) {
       if (!p.dealCompletedAt || p.amount == null) continue;
+      const hasResolvedSplit = parentKeysWithResolvedSplit.has(`${bill._id}_k${p.ky}`);
+      if (hasResolvedSplit && agencyScopeId) continue;
       if (agencyScopeId && String(p.assignedAgencyId ?? "").trim() !== agencyScopeId) continue;
 
       lines.push({
@@ -506,9 +511,9 @@ async function buildMailQueueSnapshotInternal(scope?: AgencyReadScope): Promise<
         company: bill.company,
         ky: p.ky,
         amount: p.amount,
-        assignedAgencyName: p.assignedAgencyName,
+        assignedAgencyName: hasResolvedSplit ? null : p.assignedAgencyName,
         ca: p.ca,
-        dlGiaoName: p.dlGiaoName,
+        dlGiaoName: hasResolvedSplit ? null : p.dlGiaoName,
         customerName: p.customerName,
         scanDdMm: p.scanDdMm,
         cardType: p.cardType,
@@ -2146,6 +2151,30 @@ function caFromSplitField(raw: unknown): CaSlot | null {
   return null;
 }
 
+function splitDealAtMs(raw: unknown): number {
+  if (!raw) return Number.NaN;
+  const d = raw instanceof Date ? raw : new Date(String(raw));
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : Number.NaN;
+}
+
+function pickScanDdMmFromLatestSplit(
+  split1: Record<string, unknown>,
+  split2: Record<string, unknown>
+): string | null {
+  const s1At = splitDealAtMs(split1.dealCompletedAt);
+  const s2At = splitDealAtMs(split2.dealCompletedAt);
+  const s1Scan = pickFirstStr(split1.scanDdMm as string);
+  const s2Scan = pickFirstStr(split2.scanDdMm as string);
+  if (Number.isFinite(s1At) || Number.isFinite(s2At)) {
+    if (Number.isFinite(s1At) && Number.isFinite(s2At)) {
+      return s2At >= s1At ? s2Scan ?? s1Scan : s1Scan ?? s2Scan;
+    }
+    return Number.isFinite(s2At) ? s2Scan ?? s1Scan : s1Scan ?? s2Scan;
+  }
+  return s2Scan ?? s1Scan ?? null;
+}
+
 /** Sau mỗi lần cập nhật split: đồng bộ AssignedCode theo từng số tiền tách (Hoàn tiền). */
 async function syncAssignedCodesForSplitParts(
   billId: string,
@@ -2190,26 +2219,24 @@ async function completeOriginalPeriodAfterSplits(entry: {
   const s1 = entry.split1;
   const s2 = entry.split2;
   const completedAt = new Date().toISOString();
+  const resolvedScanDdMm = pickScanDdMmFromLatestSplit(s1, s2);
+  const beforeOrig = dto.periods.find((p) => p.ky === oky);
+  if (beforeOrig?.amount != null) {
+    await deleteAssignedCodeDoc(doc.customerCode, beforeOrig.amount, doc.year, doc.month);
+  }
   const nextPeriods = dto.periods.map((p) => {
     if (p.ky !== oky) return p;
     return {
       ...p,
       dealCompletedAt: completedAt,
-      scanDdMm: pickFirstStr(p.scanDdMm, s1.scanDdMm as string, s2.scanDdMm as string),
-      ca: p.ca ?? caFromSplitField(s1.ca) ?? caFromSplitField(s2.ca),
-      assignedAgencyId: pickFirstStr(p.assignedAgencyId, s1.assignedAgencyId as string, s2.assignedAgencyId as string),
-      assignedAgencyName: pickFirstStr(
-        p.assignedAgencyName,
-        s1.assignedAgencyName as string,
-        s2.assignedAgencyName as string
-      ),
-      dlGiaoName: pickFirstStr(p.dlGiaoName, s1.dlGiaoName as string, s2.dlGiaoName as string),
-      customerName: pickFirstStr(p.customerName, s1.customerName as string, s2.customerName as string),
-      cardType: pickFirstStr(p.cardType, s1.cardType as string, s2.cardType as string),
-      paymentConfirmed: Boolean(
-        p.paymentConfirmed || (Boolean(s1.paymentConfirmed) && Boolean(s2.paymentConfirmed))
-      ),
-      cccdConfirmed: Boolean(p.cccdConfirmed || (Boolean(s1.cccdConfirmed) && Boolean(s2.cccdConfirmed))),
+      // Mã tổng chỉ là điểm chốt sổ + đi mail; không bám đại lý của mã con.
+      scanDdMm: resolvedScanDdMm,
+      ca: p.ca ?? caFromSplitField(s2.ca) ?? caFromSplitField(s1.ca),
+      assignedAgencyId: null,
+      assignedAgencyName: null,
+      dlGiaoName: null,
+      paymentConfirmed: true,
+      cccdConfirmed: true,
     };
   });
   doc.set("periods", periodsDtoToMongoSchema(nextPeriods) as typeof doc.periods);
@@ -2219,19 +2246,6 @@ async function completeOriginalPeriodAfterSplits(entry: {
   const allPeriodsConfirmed = nextPeriods.every((p) => p.amount == null || Boolean(p.dealCompletedAt));
   if (allPeriodsConfirmed) {
     await markVoucherCodeCompleted(doc.customerCode);
-  }
-  const orig = nextPeriods.find((p) => p.ky === oky);
-  if (orig?.amount != null && orig.assignedAgencyId?.trim() && orig.assignedAgencyName?.trim()) {
-    await upsertAssignedCodeDoc({
-      customerCode: doc.customerCode,
-      amount: orig.amount,
-      year: doc.year,
-      month: doc.month,
-      agencyId: orig.assignedAgencyId.trim(),
-      agencyName: orig.assignedAgencyName.trim(),
-      billId: String(doc._id),
-      ky: oky,
-    });
   }
   return doc;
 }
