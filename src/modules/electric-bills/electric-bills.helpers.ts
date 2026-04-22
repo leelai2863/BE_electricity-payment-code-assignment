@@ -72,6 +72,11 @@ export type PatchBody = {
   evnKyBillThang?: number | null;
   evnKyBillNam?: number | null;
   periods?: PeriodPatch;
+  /**
+   * Chỉ SUPER_ADMIN: xóa toàn bộ dữ liệu một kỳ (số tiền, gán mã, xác nhận, …).
+   * Không gửi kèm `periods` hay các trường cập nhật hóa đơn khác — chỉ `resetPeriodKy` + actor.
+   */
+  resetPeriodKy?: 1 | 2 | 3;
   actorUserId?: string;
   actorRoles?: string[] | null;
 };

@@ -6,6 +6,10 @@ import { chargeDedupeKey, type ChargeIngestItem } from "@/lib/checkbill-charge-u
 import { BillingScanHistory } from "@/models/BillingScanHistory";
 import { CheckbillIngestBatch } from "@/models/CheckbillIngestBatch";
 import { ChargesStagingRow } from "@/models/ChargesStagingRow";
+import {
+  findBillsByYearMonth,
+  findNonCancelledSplitsByOriginalBillIds,
+} from "@/modules/electric-bills/electric-bills.repository";
 
 type RawChargeRow = {
   nguon?: string;
@@ -231,6 +235,66 @@ async function filterExistingFromApprovedHistory(
   return { fresh, duplicateApprovedCount: items.length - fresh.length };
 }
 
+/**
+ * Sau hạ cước, từng phần (split1/split2) đã là “số tiền hợp lệ” trên hệ thống.
+ * Quét cước có thể đẩy lại đúng phần còn lại (hoặc phần 1) với số tiền đó — khác lịch sử duyệt
+ * (chỉ ghi tổng lần đầu) nên vượt qua filter lịch sử. Chỉ khớp split1/split2 (không khớp mọi period.amount)
+ * để tránh trùng số tình cờ trên hai kỳ thật trong cùng tháng.
+ */
+async function filterIngestMatchingSplitPartAmounts(
+  items: ChargeIngestItem[],
+  completedAt: Date
+): Promise<{ fresh: ChargeIngestItem[]; splitPartDuplicateCount: number }> {
+  if (items.length === 0) return { fresh: [], splitPartDuplicateCount: 0 };
+  if (!(completedAt instanceof Date) || Number.isNaN(completedAt.getTime())) {
+    return { fresh: items, splitPartDuplicateCount: 0 };
+  }
+  const year = completedAt.getUTCFullYear();
+  const month = completedAt.getUTCMonth() + 1;
+
+  const codes = [...new Set(items.map((it) => String(it.maKh ?? "").trim().toUpperCase()).filter(Boolean))];
+  if (codes.length === 0) return { fresh: items, splitPartDuplicateCount: 0 };
+
+  const bills = await findBillsByYearMonth(year, month);
+  const codeSet = new Set(codes);
+  const relevantBills = bills.filter((b) =>
+    codeSet.has(String((b as { customerCode?: unknown }).customerCode ?? "").trim().toUpperCase())
+  );
+  if (relevantBills.length === 0) return { fresh: items, splitPartDuplicateCount: 0 };
+
+  const billIds = relevantBills.map((b) => String((b as { _id: unknown })._id));
+  const splits = await findNonCancelledSplitsByOriginalBillIds(billIds);
+  if (splits.length === 0) return { fresh: items, splitPartDuplicateCount: 0 };
+
+  const blockKeys = new Set<string>();
+  for (const s of splits) {
+    const bid = String((s as { originalBillId?: unknown }).originalBillId ?? "");
+    const bill = relevantBills.find((b) => String((b as { _id: unknown })._id) === bid);
+    if (!bill) continue;
+    const code = String((bill as { customerCode?: unknown }).customerCode ?? "").trim().toUpperCase();
+    const s1 = (s as { split1?: { amount?: number } }).split1;
+    const s2 = (s as { split2?: { amount?: number } }).split2;
+    const a1 = Math.round(Number(s1?.amount ?? 0));
+    const a2 = Math.round(Number(s2?.amount ?? 0));
+    if (Number.isFinite(a1) && a1 > 0) blockKeys.add(chargeDedupeKey(code, a1));
+    if (Number.isFinite(a2) && a2 > 0) blockKeys.add(chargeDedupeKey(code, a2));
+  }
+
+  if (blockKeys.size === 0) return { fresh: items, splitPartDuplicateCount: 0 };
+
+  const fresh: ChargeIngestItem[] = [];
+  let dropped = 0;
+  for (const it of items) {
+    const k = chargeDedupeKey(it.maKh, it.soTienVnd);
+    if (blockKeys.has(k)) {
+      dropped++;
+      continue;
+    }
+    fresh.push(it);
+  }
+  return { fresh, splitPartDuplicateCount: dropped };
+}
+
 async function notifyGatewayIngestReceived(data: {
   batchId: string;
   jobId: string;
@@ -359,9 +423,12 @@ export async function ingestChargesSnapshot(
     await filterExistingFromApprovedHistory(unique, completedAt);
   duplicateApprovedCount = dupApproved;
 
-  if (freshAfterApproved.length > 0) {
+  const { fresh: freshAfterSplitFilter, splitPartDuplicateCount } =
+    await filterIngestMatchingSplitPartAmounts(freshAfterApproved, completedAt);
+
+  if (freshAfterSplitFilter.length > 0) {
     const bulkResult = await ChargesStagingRow.bulkWrite(
-      freshAfterApproved.map((it) => ({
+      freshAfterSplitFilter.map((it) => ({
         updateOne: {
           filter: { dedupeHash: chargeDedupeKey(it.maKh, it.soTienVnd) },
           update: {
@@ -388,10 +455,11 @@ export async function ingestChargesSnapshot(
       { ordered: false }
     );
     itemsAccepted = Number((bulkResult as { upsertedCount?: number }).upsertedCount ?? 0);
-    duplicateExistingCount = freshAfterApproved.length - itemsAccepted;
+    duplicateExistingCount = freshAfterSplitFilter.length - itemsAccepted;
   }
 
-  const totalDuplicateDropped = duplicateCount + duplicateApprovedCount + duplicateExistingCount;
+  const totalDuplicateDropped =
+    duplicateCount + duplicateApprovedCount + duplicateExistingCount + splitPartDuplicateCount;
 
   const doc = await CheckbillIngestBatch.create({
     _id: batchOid,
@@ -432,6 +500,7 @@ export async function ingestChargesSnapshot(
         duplicateRowsDropped: totalDuplicateDropped,
         fullFetch: usedFetch,
         projectId: String(body.project_id ?? "checkbill").trim(),
+        splitPartDuplicateCount,
       },
     });
   } catch {
@@ -459,9 +528,10 @@ export async function ingestChargesSnapshot(
         itemsAccepted,
         rawRowCount,
         duplicateRowsDropped: totalDuplicateDropped,
+        /** Số dòng bỏ vì trùng số tiền từng phần hạ cước (split) đã có trên hệ thống */
+        splitPartDuplicateDropped: splitPartDuplicateCount,
         fullFetch: usedFetch,
       },
     },
   };
 }
-

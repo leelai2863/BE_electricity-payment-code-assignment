@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   createMock: vi.fn(),
   bulkWriteMock: vi.fn(),
   historyFindMock: vi.fn(),
+  findBillsByYearMonthMock: vi.fn(),
+  findNonCancelledSplitsByOriginalBillIdsMock: vi.fn(),
 }));
 
 vi.mock("@/lib/mongodb", () => ({
@@ -31,6 +33,11 @@ vi.mock("@/models/BillingScanHistory", () => ({
   BillingScanHistory: {
     find: mocks.historyFindMock,
   },
+}));
+
+vi.mock("@/modules/electric-bills/electric-bills.repository", () => ({
+  findBillsByYearMonth: mocks.findBillsByYearMonthMock,
+  findNonCancelledSplitsByOriginalBillIds: mocks.findNonCancelledSplitsByOriginalBillIdsMock,
 }));
 
 import { CheckbillIngestController } from "./checkbill-ingest.controller";
@@ -85,6 +92,8 @@ describe("POST /api/checkbill/charges-snapshot", () => {
         lean: vi.fn().mockResolvedValue([]),
       }),
     });
+    mocks.findBillsByYearMonthMock.mockResolvedValue([]);
+    mocks.findNonCancelledSplitsByOriginalBillIdsMock.mockResolvedValue([]);
   });
 
   it("returns 401 when missing secret auth", async () => {
@@ -171,6 +180,28 @@ describe("POST /api/checkbill/charges-snapshot", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(res.body.data.itemsAccepted).toBe(0);
+    expect(res.body.data.duplicateRowsDropped).toBe(1);
+    expect(mocks.bulkWriteMock).not.toHaveBeenCalled();
+  });
+
+  it("drops row when amount matches split1/split2 of non-cancelled hạ cước (cùng tháng mã hóa đơn)", async () => {
+    mocks.findBillsByYearMonthMock.mockResolvedValue([
+      { _id: "507f1f77bcf86cd799439011", customerCode: "PA123456789" },
+    ]);
+    mocks.findNonCancelledSplitsByOriginalBillIdsMock.mockResolvedValue([
+      {
+        originalBillId: "507f1f77bcf86cd799439011",
+        split1: { amount: 100_000 },
+        split2: { amount: 120_000 },
+      },
+    ]);
+    const res = await request(app)
+      .post("/api/checkbill/charges-snapshot")
+      .set("Authorization", "Bearer test-secret")
+      .send(buildValidPayload());
+
+    expect(res.status).toBe(200);
     expect(res.body.data.itemsAccepted).toBe(0);
     expect(res.body.data.duplicateRowsDropped).toBe(1);
     expect(mocks.bulkWriteMock).not.toHaveBeenCalled();

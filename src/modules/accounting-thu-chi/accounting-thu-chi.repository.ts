@@ -186,3 +186,16 @@ export async function findLinkedChiEntries(): Promise<AccountingThuChiLean[]> {
     .exec();
   return items as AccountingThuChiLean[];
 }
+
+/** Dòng Thu chi Hạ cước còn neo tới mã hóa đơn + kỳ — chặn gỡ kỳ khi chưa xử lý. */
+export async function countHaCuocThuChiForBillKy(
+  targetBillId: string,
+  targetKy: 1 | 2 | 3
+): Promise<number> {
+  if (!targetBillId.trim()) return 0;
+  return AccountingThuChiEntry.countDocuments({
+    "haCuocContext.kind": "HA_CUOC",
+    "haCuocContext.targetBillId": targetBillId,
+    "haCuocContext.targetKy": targetKy,
+  });
+}

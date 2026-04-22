@@ -60,7 +60,10 @@ import {
   findActiveSplitsByOriginalBill,
   findResolvedSplitEntriesForQueue,
   ensureRefundLineStateSplitPartIndex,
+  countNonCancelledSplitsForBillKy,
+  deleteRefundLineStatesForBillKy,
 } from "@/modules/electric-bills/electric-bills.repository";
+import { countHaCuocThuChiForBillKy } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 import {
   ServiceError,
   type AmountFilter,
@@ -1408,6 +1411,17 @@ function emptyManualPeriod(ky: 1 | 2 | 3): ElectricBillPeriod {
   };
 }
 
+/** Trạng thái kỳ về “chưa nhập” (SUPER_ADMIN gỡ kỳ) — bao gồm xóa dấu vết đồng bộ hạn EVN. */
+function emptyPeriodForSuperAdminWipe(ky: 1 | 2 | 3): ElectricBillPeriod {
+  return {
+    ...emptyManualPeriod(ky),
+    evnPaymentDeadlineSyncStatus: null,
+    evnPaymentDeadlineSyncError: null,
+    evnPaymentDeadlineSyncedAt: null,
+    evnPaymentDeadlineSyncKey: null,
+  };
+}
+
 function parsePositiveAmountInput(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number" && Number.isFinite(v)) {
@@ -1721,6 +1735,80 @@ export async function patchElectricBill(id: string, body: PatchBody, auditLabels
     const doc = await findElectricBillById(id);
     if (!doc) {
       throw new ServiceError(404, "Không tìm thấy bản ghi");
+    }
+
+    if (body.resetPeriodKy !== undefined) {
+      const rawKy = (body as PatchBody & { resetPeriodKy?: unknown }).resetPeriodKy;
+      const nKy = Number(rawKy);
+      if (rawKy === null || !Number.isFinite(nKy) || (nKy !== 1 && nKy !== 2 && nKy !== 3)) {
+        throw new ServiceError(400, "resetPeriodKy phải là 1, 2 hoặc 3.");
+      }
+      const resetKy = nKy as 1 | 2 | 3;
+      const allowedOnly = new Set(["resetPeriodKy", "actorUserId", "actorRoles"]);
+      for (const key of Object.keys(body as Record<string, unknown>)) {
+        if (!allowedOnly.has(key)) {
+          throw new ServiceError(
+            400,
+            "Khi dùng resetPeriodKy chỉ được gửi resetPeriodKy và thông tin actor (actorUserId, actorRoles)."
+          );
+        }
+      }
+      const saRoles = Array.isArray(body.actorRoles)
+        ? body.actorRoles
+            .filter((x): x is string => typeof x === "string")
+            .map((x) => x.trim().toUpperCase())
+        : [];
+      if (!saRoles.includes("SUPER_ADMIN")) {
+        throw new ServiceError(403, "Chỉ SUPER_ADMIN được gỡ toàn bộ dữ liệu một kỳ.");
+      }
+      const billOid = String(id);
+      const nSplit = await countNonCancelledSplitsForBillKy(billOid, resetKy);
+      if (nSplit > 0) {
+        throw new ServiceError(
+          409,
+          "Còn tách mã (hạ cước) cho kỳ này. Hủy tách mã hoặc xử lý bản ghi tách trước khi gỡ kỳ."
+        );
+      }
+      const nHa = await countHaCuocThuChiForBillKy(billOid, resetKy);
+      if (nHa > 0) {
+        throw new ServiceError(
+          409,
+          "Còn dòng Thu chi Hạ cước neo kỳ này. Xử lý tại trang Thu chi trước khi gỡ kỳ."
+        );
+      }
+      const serialized = serializeElectricBill(doc.toObject());
+      const beforeRow = serialized.periods.find((p) => p.ky === resetKy);
+      if (beforeRow && beforeRow.amount != null) {
+        await deleteAssignedCodeDoc(doc.customerCode, beforeRow.amount, doc.year, doc.month);
+      }
+      await deleteRefundLineStatesForBillKy(billOid, resetKy);
+      const wipe = emptyPeriodForSuperAdminWipe(resetKy);
+      const nextPeriods = serialized.periods.map((p) => (p.ky === resetKy ? wipe : p));
+      doc.set("periods", periodsDtoToMongoSchema(nextPeriods) as typeof doc.periods);
+      syncBillLevelFromPeriods(doc, nextPeriods);
+      doc.markModified("periods");
+      await doc.save();
+      const allPeriodsConfirmed = nextPeriods.every((p) => p.amount == null || Boolean(p.dealCompletedAt));
+      if (allPeriodsConfirmed) {
+        await markVoucherCodeCompleted(doc.customerCode);
+      }
+      await writeAuditLog({
+        actorUserId: actorId,
+        action: "electric.bill_reset_period_superadmin",
+        entityType: "ElectricBillRecord",
+        entityId: doc._id,
+        metadata: {
+          customerCode: doc.customerCode,
+          resetPeriodKy: resetKy,
+          hadAmount: beforeRow?.amount != null,
+        },
+        actorEmail: auditLabels?.actorEmail,
+        actorDisplayName: auditLabels?.actorDisplayName,
+      });
+      return {
+        data: serializeElectricBill(doc.toObject()),
+        source: "mongodb",
+      };
     }
 
     const actorRolesTop = Array.isArray(body.actorRoles)

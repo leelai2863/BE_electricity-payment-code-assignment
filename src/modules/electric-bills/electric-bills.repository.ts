@@ -410,6 +410,34 @@ export async function findActiveSplitsByOriginalBill(originalBillId: string) {
   return SplitBillEntry.find({ originalBillId, status: "active" }).lean();
 }
 
+/** Tách mã chưa hủy (active/resolved) — dùng chặn quét cước lặp lại cùng số tiền từng phần. */
+export async function findNonCancelledSplitsByOriginalBillIds(originalBillIds: string[]) {
+  const ids = originalBillIds.filter((id) => id && String(id).trim());
+  if (ids.length === 0) return [];
+  return SplitBillEntry.find({
+    originalBillId: { $in: ids },
+    status: { $ne: "cancelled" },
+  })
+    .select({ originalBillId: 1, split1: 1, split2: 1 })
+    .lean();
+}
+
+/** Tách mã còn hiệu lực (active/resolved) — cần xử lý trước khi gỡ kỳ. */
+export async function countNonCancelledSplitsForBillKy(
+  originalBillId: string,
+  originalKy: 1 | 2 | 3
+) {
+  return SplitBillEntry.countDocuments({
+    originalBillId,
+    originalKy,
+    status: { $ne: "cancelled" },
+  });
+}
+
+export async function deleteRefundLineStatesForBillKy(billId: string, ky: 1 | 2 | 3) {
+  return RefundLineState.deleteMany({ billId, ky });
+}
+
 /** Các tách mã đã kết thúc — dùng tạo dòng Hoàn tiền cho 2 mã con */
 export async function findResolvedSplitEntriesForQueue(limit = 5000) {
   return SplitBillEntry.find({ status: "resolved" })

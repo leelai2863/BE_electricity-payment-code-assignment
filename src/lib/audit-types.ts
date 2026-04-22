@@ -13,6 +13,7 @@ export type AuditAction =
   | "checkbill.ingest_charges_snapshot"
   | "electric.assign_agency"
   | "electric.invoice_patch"
+  | "electric.bill_reset_period_superadmin"
   | "electric.manual_create"
   | "agency.create"
   | "auth.login"

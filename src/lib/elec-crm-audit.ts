@@ -9,6 +9,7 @@ function auditActionForCentral(mongoAction: AuditAction): string {
   const map: Partial<Record<AuditAction, string>> = {
     "electric.assign_agency": "elec.assign_agency",
     "electric.invoice_patch": "elec.invoice_patch",
+    "electric.bill_reset_period_superadmin": "elec.bill_reset_period_superadmin",
     "electric.manual_create": "elec.manual_create",
     "voucher.assign": "elec.voucher.assign",
     "voucher.upload_ocr": "elec.voucher.upload_ocr",
@@ -48,6 +49,13 @@ function buildViSummary(
       return code
         ? `Cập nhật hóa đơn điện mã KH ${code}${fields ? ` (${fields})` : ""}.`
         : `Cập nhật hóa đơn điện (${entityType}).`;
+    }
+    case "electric.bill_reset_period_superadmin": {
+      const code = String(m.customerCode ?? "").trim();
+      const rk = m.resetPeriodKy;
+      return code
+        ? `SUPER_ADMIN gỡ toàn bộ dữ liệu kỳ ${rk != null ? String(rk) : "?"} (mã KH ${code}).`
+        : `SUPER_ADMIN gỡ dữ liệu một kỳ (${entityType}).`;
     }
     case "electric.manual_create": {
       const code = String(m.customerCode ?? "").trim();
