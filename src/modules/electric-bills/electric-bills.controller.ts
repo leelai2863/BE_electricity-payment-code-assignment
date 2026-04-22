@@ -16,6 +16,7 @@ import {
   getInvoiceCompletedMonths,
   getInvoiceCompleted,
   getMailQueue,
+  getMailQueueWithQuery,
   listRefundFeeRules,
   createRefundFeeRule,
   updateRefundFeeRule,
@@ -172,7 +173,10 @@ export async function getMailQueueHandler(_req: Request, res: Response) {
   try {
     const agencyScopeId = customerAgencyScopeOr403(_req, res);
     if (agencyScopeId === "__denied__") return;
-    const result = await getMailQueue({ agencyScopeId });
+    const hasQuery = Object.keys(_req.query ?? {}).length > 0;
+    const result = hasQuery
+      ? await getMailQueueWithQuery(_req.query as Record<string, unknown>, { agencyScopeId })
+      : await getMailQueue({ agencyScopeId });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đọc được MongoDB");

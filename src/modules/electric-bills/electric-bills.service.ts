@@ -95,6 +95,13 @@ type AgencyReadScope = {
   agencyScopeId?: string | null;
 };
 
+type MailQueueQueryParams = {
+  page?: number;
+  pageSize?: number;
+  exportDate?: string;
+  exportShift?: "ca1" | "ca2";
+};
+
 /** Ghi nhận người dùng đã xuất tệp (Excel/CSV) — CRM gọi sau khi tạo tệp cục bộ thành công. */
 export async function recordDataExportAudit(params: {
   actorUserId: string;
@@ -489,6 +496,113 @@ export async function getMailQueue(scope?: AgencyReadScope) {
   } catch (error) {
     throw new ServiceError(503, getErrorMessage(error, "Không đọc được MongoDB"), { data: [] });
   }
+}
+
+function parsePositiveInt(raw: unknown): number | null {
+  if (typeof raw !== "string") return null;
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < 1) return null;
+  return v;
+}
+
+function parseExportDateYmd(raw: unknown): { year: number; month: number; day: number } | null {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+function utcMsFromVnLocal(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute = 0,
+  second = 0,
+): number {
+  return Date.UTC(year, month - 1, day, hour - 7, minute, second, 0);
+}
+
+function buildExportWindowMs(
+  exportDate: { year: number; month: number; day: number },
+  exportShift: "ca1" | "ca2",
+): { startMs: number; endMs: number } {
+  const selectedDayStart = utcMsFromVnLocal(exportDate.year, exportDate.month, exportDate.day, 0, 0, 0);
+  if (exportShift === "ca1") {
+    return {
+      startMs: selectedDayStart - 9 * 60 * 60 * 1000, // 15:00 ngày trước
+      endMs: selectedDayStart + 9 * 60 * 60 * 1000, // 09:00 ngày chọn
+    };
+  }
+  return {
+    startMs: selectedDayStart + 9 * 60 * 60 * 1000, // 09:00 ngày chọn
+    endMs: selectedDayStart + 14 * 60 * 60 * 1000, // 14:00 ngày chọn
+  };
+}
+
+export async function getMailQueueWithQuery(
+  query: Record<string, unknown>,
+  scope?: AgencyReadScope
+) {
+  const page = parsePositiveInt(query.page) ?? null;
+  const pageSizeRaw = parsePositiveInt(query.pageSize) ?? null;
+  const pageSize = pageSizeRaw == null ? null : Math.min(pageSizeRaw, 500);
+  const exportDate = parseExportDateYmd(query.exportDate);
+  const exportShift = query.exportShift === "ca1" || query.exportShift === "ca2" ? query.exportShift : null;
+  const params: MailQueueQueryParams = { page: page ?? undefined, pageSize: pageSize ?? undefined };
+  if (exportDate && exportShift) {
+    params.exportDate = `${String(exportDate.year).padStart(4, "0")}-${String(exportDate.month).padStart(2, "0")}-${String(exportDate.day).padStart(2, "0")}`;
+    params.exportShift = exportShift;
+  }
+
+  const snapshot = await getMailQueue(scope);
+  let data = snapshot.data;
+
+  if (exportDate && exportShift) {
+    const { startMs, endMs } = buildExportWindowMs(exportDate, exportShift);
+    data = data.filter((row) => {
+      const t = Date.parse(row.dealCompletedAt);
+      if (!Number.isFinite(t)) return false;
+      return exportShift === "ca1" ? t >= startMs && t < endMs : t >= startMs && t <= endMs;
+    });
+  }
+
+  if (page && pageSize) {
+    const total = data.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const normalizedPage = Math.min(page, totalPages);
+    const start = (normalizedPage - 1) * pageSize;
+    const end = start + pageSize;
+    return {
+      ...snapshot,
+      data: data.slice(start, end),
+      pagination: {
+        total,
+        page: normalizedPage,
+        pageSize,
+        totalPages,
+      },
+      query: params,
+    };
+  }
+
+  return {
+    ...snapshot,
+    data,
+    pagination: {
+      total: data.length,
+      page: 1,
+      pageSize: data.length,
+      totalPages: 1,
+    },
+    query: params,
+  };
 }
 
 export async function createRefundFeeRule(body: {
