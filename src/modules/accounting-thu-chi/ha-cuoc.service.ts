@@ -569,7 +569,10 @@ export type RevertHaCuocContextOptions = {
 
 function hasSuperAdminRole(roles: unknown): boolean {
   if (!Array.isArray(roles)) return false;
-  return roles.some((r) => String(r).trim().toUpperCase() === "SUPER_ADMIN");
+  return roles.some((r) => {
+    const normalized = String(r).trim().toUpperCase().replace(/[\s-]+/g, "_");
+    return normalized === "SUPER_ADMIN" || /(?:^|_)SUPER_ADMIN(?:_|$)/.test(normalized);
+  });
 }
 
 /**
@@ -587,12 +590,21 @@ export async function revertHaCuocContext(
 
   const ent = await findSplitBillEntryById(splitId);
   if (!ent) return false;
+  const status = String(ent.status ?? "");
 
-  if (ent.status === "resolved") {
+  if (status === "resolved") {
     if (allowOmit) return true;
     throw new ServiceError(
       409,
       `Split của mã ${ctx.customerCode} kỳ ${ctx.targetKy} đã hoàn tất. Chỉ tài khoản SUPER_ADMIN mới gỡ được dòng Thu chi tại đây; các vai trò khác cần xử lý tại mã điện tách mã tương ứng.`,
+      { code: "HA_CUOC_SPLIT_RESOLVED" },
+    );
+  }
+  if (status !== "active") {
+    if (allowOmit) return true;
+    throw new ServiceError(
+      409,
+      `Split của mã ${ctx.customerCode} kỳ ${ctx.targetKy} không còn ở trạng thái đang tách. Chỉ tài khoản SUPER_ADMIN mới gỡ được dòng Thu chi tại đây; các vai trò khác cần xử lý tại mã điện tách mã tương ứng.`,
       { code: "HA_CUOC_SPLIT_RESOLVED" },
     );
   }
