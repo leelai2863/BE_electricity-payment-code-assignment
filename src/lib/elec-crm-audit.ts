@@ -211,28 +211,28 @@ function buildViSummary(
       const chi = m.chiVnd != null ? `Chi ${Number(m.chiVnd).toLocaleString("vi-VN")} đ` : "";
       const neo = String(m.linkedAgencyCode ?? "").trim();
       const parts = [thu, chi].filter(Boolean).join(", ");
-      return `Kế toán — thêm dòng thu chi${parts ? ` (${parts})` : ""}${src ? `, nguồn «${src}»` : ""}${neo ? `, neo đại lý ${neo}` : ""}.`;
+      return `Thu chi — thêm dòng${parts ? ` (${parts})` : ""}${src ? `, nguồn «${src}»` : ""}${neo ? `, neo đại lý ${neo}` : ""}.`;
     }
     case "accounting.thu_chi_update": {
       const id = String(m.entryId ?? "").trim();
-      return `Kế toán — sửa dòng thu chi${id ? ` (${id})` : ""}: ${String(m.changeSummary ?? "chi tiết trong metadata")}.`;
+      return `Thu chi — cập nhật dòng${id ? ` (${id})` : ""}: ${String(m.changeSummary ?? "chi tiết trong metadata")}.`;
     }
     case "accounting.thu_chi_delete": {
       const id = String(m.entryId ?? "").trim();
-      return `Kế toán — xóa dòng thu chi${id ? ` (${id})` : ""}.`;
+      return `Thu chi — xóa dòng${id ? ` (${id})` : ""}.`;
     }
     case "accounting.thu_chi_bank_catalog_create":
-      return `Kế toán — thêm danh mục ngân hàng thu chi (${String(m.bank ?? "")}).`;
+      return `Thu chi — thêm danh mục ngân hàng (${String(m.bank ?? "")}).`;
     case "accounting.thu_chi_bank_catalog_update":
-      return `Kế toán — sửa danh mục ngân hàng thu chi (${String(m.entryId ?? "")}).`;
+      return `Thu chi — cập nhật danh mục ngân hàng (${String(m.entryId ?? "")}).`;
     case "accounting.thu_chi_bank_catalog_delete":
-      return `Kế toán — xóa danh mục ngân hàng thu chi (${String(m.entryId ?? "")}).`;
+      return `Thu chi — xóa danh mục ngân hàng (${String(m.entryId ?? "")}).`;
     case "accounting.thu_chi_source_catalog_create":
-      return `Kế toán — thêm danh mục nguồn thu chi (${String(m.source ?? "")}).`;
+      return `Thu chi — thêm danh mục nguồn (${String(m.source ?? "")}).`;
     case "accounting.thu_chi_source_catalog_update":
-      return `Kế toán — sửa danh mục nguồn thu chi (${String(m.entryId ?? "")}).`;
+      return `Thu chi — cập nhật danh mục nguồn (${String(m.entryId ?? "")}).`;
     case "accounting.thu_chi_source_catalog_delete":
-      return `Kế toán — xóa danh mục nguồn thu chi (${String(m.entryId ?? "")}).`;
+      return `Thu chi — xóa danh mục nguồn (${String(m.entryId ?? "")}).`;
     case "electric.refund_line_patch": {
       const mkh = String(m.customerCode ?? "").trim();
       const ky = m.ky != null ? ` kỳ ${m.ky}` : "";
