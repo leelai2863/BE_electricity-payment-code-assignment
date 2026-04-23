@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { isRealCustomerNameValue } from "@/lib/electric-bill-completion";
 import { ServiceError } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   createSplitBillEntry,
@@ -56,6 +57,41 @@ export function formatAnchorDdMmHoChiMinh(d: Date): string {
   const dd = parts.find((p) => p.type === "day")?.value ?? "";
   const mm = parts.find((p) => p.type === "month")?.value ?? "";
   return `${dd}/${mm}`;
+}
+
+type CaSlot = "10h" | "16h" | "24h";
+
+function isCaSlot(v: unknown): v is CaSlot {
+  return v === "10h" || v === "16h" || v === "24h";
+}
+
+/**
+ * Hạ cước qua Thu chi không phụ thuộc việc kỳ trên HĐ đã ✓ đủ CA/tên KH.
+ * Ưu tiên lấy từ hóa đơn nếu có; thiếu thì CA mặc định 24h, tên hiển thị = mã KH.
+ */
+function haCuocSplitEchoFromBillKy(
+  bill: { periods?: unknown; customerName?: unknown } | null,
+  ky: 1 | 2 | 3,
+  customerCode: string
+): { ca: CaSlot; customerName: string } {
+  const fallbackName = customerCode.trim().toUpperCase().replace(/\s+/g, "") || "—";
+  if (!bill) {
+    return { ca: "24h", customerName: fallbackName };
+  }
+  const periods = Array.isArray(bill.periods) ? bill.periods : [];
+  const row = periods.find((p) => Number((p as { ky?: unknown }).ky) === ky) as
+    | { ca?: unknown; customerName?: unknown }
+    | undefined;
+  const ca: CaSlot = row && isCaSlot(row.ca) ? row.ca : "24h";
+  let customerName = "";
+  if (row?.customerName != null && isRealCustomerNameValue(row.customerName)) {
+    customerName = String(row.customerName).trim();
+  }
+  if (!customerName && bill.customerName != null && isRealCustomerNameValue(bill.customerName)) {
+    customerName = String(bill.customerName).trim();
+  }
+  if (!customerName) customerName = fallbackName;
+  return { ca, customerName };
 }
 
 export type HaCuocResolveResult =
@@ -361,10 +397,9 @@ export async function applyHaCuocAfterThuChiSaved(params: {
   const resolved = await resolveHaCuocTarget({ customerCode: code, amountOut: chi, anchorDate: params.anchorDate });
   const scanDdMm = formatAnchorDdMmHoChiMinh(params.anchorDate);
 
-  // Split phần Thu chi đã trả luôn được coi là đã chốt ngay tại thời điểm ghi nhận:
-  // paymentConfirmed + cccdConfirmed + dealCompletedAt = anchorDate. Thiếu `dealCompletedAt`
-  // sẽ khiến `patchSplitPeriod` không nhận ra split1 đã done, không trigger
-  // `completeOriginalPeriodAfterSplits`, dẫn đến bill không chuyển qua archive.
+  // Thu chi chỉ ghi nhận phát sinh chi tiền, KHÔNG tự chốt ✓ phần split1.
+  // User phải xác nhận thủ công trên Danh sách hóa đơn để giữ đúng nghiệp vụ:
+  // chỉ khi cả 2 phần split đều có dealCompletedAt thì kỳ cha mới được xem là hoàn tất.
   const thuChiDealCompletedAt = new Date(params.anchorDate).toISOString();
 
   // Khi đã hạ cước: parent kỳ không còn thuộc về bất kỳ đại lý nào; chỉ giữ vai trò
@@ -437,6 +472,9 @@ export async function applyHaCuocAfterThuChiSaved(params: {
         }
       }
 
+      const billForEcho = billBeforeSplit ?? (await findElectricBillById(resolved.billId));
+      const echo = haCuocSplitEchoFromBillKy(billForEcho, resolved.ky, code);
+
       const entry = await createSplitBillEntry({
         originalBillId: resolved.billId,
         originalKy: resolved.ky,
@@ -450,10 +488,12 @@ export async function applyHaCuocAfterThuChiSaved(params: {
           paymentConfirmed: true,
           scanDdMm,
           cccdConfirmed: true,
+          ca: echo.ca,
+          customerName: echo.customerName,
           assignedAgencyId: null,
           assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
           dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
-          dealCompletedAt: new Date(params.anchorDate),
+          dealCompletedAt: null,
         },
         split2: {
           amount: resolved.originalAmount - chi,
@@ -466,14 +506,20 @@ export async function applyHaCuocAfterThuChiSaved(params: {
         parentAgencyBeforeHaCuoc,
       });
       splitId = String(entry._id);
-      await patchSplitPeriod(splitId, 1, {
-        paymentConfirmed: true,
-        scanDdMm,
-        cccdConfirmed: true,
-        assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
-        dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
-        dealCompletedAt: thuChiDealCompletedAt,
-      });
+      await patchSplitPeriod(
+        splitId,
+        1,
+        {
+          paymentConfirmed: true,
+          scanDdMm,
+          cccdConfirmed: true,
+          ca: echo.ca,
+          customerName: echo.customerName,
+          assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
+          dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
+        },
+        { bypassDealCompletionGuard: true },
+      );
       await detachParentAgencyForHaCuoc(resolved.billId, resolved.ky);
       return buildHaCuocContext(resolved, chi, splitId, false);
     } catch (err) {
@@ -491,13 +537,24 @@ export async function applyHaCuocAfterThuChiSaved(params: {
   // resolveExisting: Thu chi đợt 2 trả nốt phần còn lại (split2). Chốt luôn split2 để
   // khi cả 2 split đều có dealCompletedAt, parent kỳ sẽ được đóng và bill rời khỏi
   // "chưa duyệt" qua archive. Cũng detach parent agency nếu split cũ chưa dọn.
+  const billForEcho2 = await findElectricBillById(resolved.billId);
+  const echo2 = haCuocSplitEchoFromBillKy(billForEcho2, resolved.ky, code);
   await detachParentAgencyForHaCuoc(resolved.billId, resolved.ky);
-  await patchSplitPeriod(resolved.splitId, 2, {
-    paymentConfirmed: true,
-    cccdConfirmed: true,
-    scanDdMm,
-    dealCompletedAt: thuChiDealCompletedAt,
-  });
+  await patchSplitPeriod(
+    resolved.splitId,
+    2,
+    {
+      paymentConfirmed: true,
+      cccdConfirmed: true,
+      scanDdMm,
+      dealCompletedAt: thuChiDealCompletedAt,
+      ca: echo2.ca,
+      customerName: echo2.customerName,
+      assignedAgencyName: HA_CUOC_SOURCE_DISPLAY,
+      dlGiaoName: HA_CUOC_SOURCE_DISPLAY,
+    },
+    { bypassDealCompletionGuard: true },
+  );
   return buildHaCuocContext(resolved, chi, resolved.splitId, true);
 }
 

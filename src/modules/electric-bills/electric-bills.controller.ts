@@ -6,6 +6,16 @@ function requestHasSuperAdminRole(req: Request): boolean {
     req.fujiUserRoles.some((x) => String(x).trim().toUpperCase() === "SUPER_ADMIN")
   );
 }
+
+function requestHasAdminOrSuperForSplitCancel(req: Request): boolean {
+  return (
+    Array.isArray(req.fujiUserRoles) &&
+    req.fujiUserRoles.some((x) => {
+      const r = String(x).trim().toUpperCase();
+      return r === "SUPER_ADMIN" || r === "ADMIN";
+    })
+  );
+}
 import {
   fujiAuditActorLabelsFromRequest,
   mergeBodyWithFujiActor,
@@ -450,10 +460,10 @@ export async function cancelSplitHandler(req: Request, res: Response) {
     const locked =
       Boolean((ent as { lockedByThuChi?: boolean } | null)?.lockedByThuChi) ||
       String((ent as { createdBy?: string } | null)?.createdBy ?? "") === "thu-chi";
-    if (locked && !requestHasSuperAdminRole(req)) {
+    if (locked && !requestHasAdminOrSuperForSplitCancel(req)) {
       res.status(403).json({
         error:
-          "Split từ Thu chi: hủy từ Danh sách hóa đơn chỉ dành cho SUPER_ADMIN (mã sẽ về trạng thái trước hạ cước để Thu chi nhập lại). Các vai trò khác xóa/sửa dòng Thu chi tương ứng.",
+          "Split từ Thu chi: hủy từ Danh sách hóa đơn cần quyền ADMIN hoặc SUPER_ADMIN (mã về trạng thái trước hạ cước để Thu chi nhập lại). Các vai trò khác xóa/sửa dòng Thu chi tương ứng.",
         code: "SPLIT_THU_CHI_LOCKED",
       });
       return;

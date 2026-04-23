@@ -224,13 +224,13 @@ export async function listUnassignedBills(query: Record<string, unknown>) {
 
 export async function getInvoiceList(query: Record<string, unknown>, scope?: AgencyReadScope) {
   const params = parseInvoiceListParams(query);
-  const match = await augmentInvoiceListMongoMatch(buildInvoiceListMatch(params), params);
   const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
   const agencyNameFilter = (params.assignedAgencyName ?? "").trim();
   const sort = invoiceListSort(params.sortBy, params.sortDir);
   const dbStarted = nowMs();
 
   await ensureDb();
+  const match = await augmentInvoiceListMongoMatch(buildInvoiceListMatch(params), params);
 
   try {
     // Nếu có filter theo tên đại lý, cần mở rộng match để bao gồm cả bill có split
@@ -2436,10 +2436,19 @@ async function attachActiveSplitsToSerializedBill(
   };
 }
 
+export type PatchSplitPeriodOptions = {
+  /**
+   * Chỉ dùng nội bộ (Hạ cước qua Thu chi): chốt dealCompletedAt mà không bắt kỳ HĐ phải ✓ đủ CA/tên KH trước.
+   * API HTTP (Danh sách hóa đơn) không được bật cờ này.
+   */
+  bypassDealCompletionGuard?: boolean;
+};
+
 export async function patchSplitPeriod(
   splitId: string,
   splitIdx: 1 | 2,
-  changes: Record<string, unknown>
+  changes: Record<string, unknown>,
+  opts?: PatchSplitPeriodOptions
 ) {
   await ensureDb();
   const existing = await findSplitBillEntryById(splitId);
@@ -2461,7 +2470,8 @@ export async function patchSplitPeriod(
     changes.dealCompletedAt != null &&
     changes.dealCompletedAt !== false &&
     String(changes.dealCompletedAt).trim() !== "";
-  if (wantsDealThis) {
+  const guardDeal = !opts?.bypassDealCompletionGuard;
+  if (guardDeal && wantsDealThis) {
     const partNext = splitIdx === 1 ? next1 : next2;
     if (!splitSubperiodHasFullConfirmationData(partNext, splitIdx, splitMeta)) {
       throw new ServiceError(
@@ -2472,7 +2482,7 @@ export async function patchSplitPeriod(
   }
   const s1NextDone = Boolean(next1.dealCompletedAt);
   const s2NextDone = Boolean(next2.dealCompletedAt);
-  if (s1NextDone && s2NextDone) {
+  if (guardDeal && s1NextDone && s2NextDone) {
     if (
       !splitSubperiodHasFullConfirmationData(next1, 1, splitMeta) ||
       !splitSubperiodHasFullConfirmationData(next2, 2, splitMeta)
