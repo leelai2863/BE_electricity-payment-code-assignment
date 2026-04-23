@@ -456,6 +456,14 @@ npm run docker:restore-mongo-seed
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-seed-to-docker.ps1
 ```
 
+**Archive gzip** (vd. `mongodump --archive --gzip`): container `giaodich-mongo` phải đang chạy.
+
+```bash
+npm run docker:restore-prod-gz
+# hoặc file khác:
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-archive-to-docker.ps1 -ArchivePath .\ten-file.gz
+```
+
 Script dùng `mongorestore --drop` — sẽ **ghi đè** collection hiện có.
 
 ---
@@ -467,7 +475,8 @@ Script dùng `mongorestore --drop` — sẽ **ghi đè** collection hiện có.
 | `npm run dev` | Chạy dev server với hot-reload |
 | `npm run build` | TypeScript type-check |
 | `npm run seed:billing -- ./file.xlsx` | **Import Excel cước → electricbillrecords** |
-| `npm run docker:restore-mongo-seed` | Restore mongodump vào Docker Mongo |
+| `npm run docker:restore-mongo-seed` | Restore mongodump (thư mục) vào Docker Mongo |
+| `npm run docker:restore-prod-gz` | Restore `assign_refu_prod.gz` (archive gzip) vào container |
 | `npm run docker:prod:up` | Production: `docker compose -f docker-compose.prod.yml` (biến trong `.env`) |
 | `npm run docker:prod:down` | Dừng stack production |
 | `npm run docker:seed` | Trong container `giaodich-backend`: V-GREEN bills + voucher seed (sau lần đầu `up`) |

@@ -13,3 +13,7 @@ mongo-seed/dump/*
 deploy/be-electric-backend.docker.tar
 deploy/be-electric-backend.docker.tar.gz
 deploy/compose-and-scripts.zip
+
+# Archive mongodump production / local (không commit)
+assign_refu*.gz
+*_prod.gz

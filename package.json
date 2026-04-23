@@ -8,6 +8,8 @@
     "build": "tsc --noEmit",
     "seed:billing": "tsx scripts/import-billing-from-xlsx.ts",
     "docker:restore-mongo-seed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-seed-to-docker.ps1",
+    "docker:restore-mongo-archive": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-archive-to-docker.ps1",
+    "docker:restore-prod-gz": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mongo-archive-to-docker.ps1 -ArchivePath ./assign_refu_prod.gz",
     "docker:seed": "docker exec giaodich-backend sh -c \"cd /app && npx tsx scripts/seed-vgreen-electric-bills.ts && npx tsx scripts/seed-voucher-codes.ts\"",
     "docker:prod:up": "docker compose -f docker-compose.prod.yml up -d --build",
     "docker:prod:down": "docker compose -f docker-compose.prod.yml down",
