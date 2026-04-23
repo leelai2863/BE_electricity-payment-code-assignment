@@ -126,7 +126,31 @@ export function serializeElectricBill(doc: ElectricBillRecordDocument | Record<s
 }
 
 
-export function billHasIncompletePeriod(dto: ElectricBillDto): boolean {
+function splitPartIsDone(deal: unknown): boolean {
+  if (deal == null) return false;
+  if (deal instanceof Date) return !Number.isNaN(deal.getTime());
+  if (typeof deal === "string") return deal.trim().length > 0;
+  return false;
+}
+
+/** Danh sách hóa đơn có thể gắn thêm `splits` (runtime, lean Mongoose) — kỳ cha hạ cước không phản ánh hết việc chưa ✓. */
+export function billHasIncompletePeriod(dto: ElectricBillDto & { splits?: unknown }): boolean {
+  const rawSplits = (dto as { splits?: unknown }).splits;
+  if (Array.isArray(rawSplits) && rawSplits.length > 0) {
+    const activeSplits = rawSplits.filter(
+      (s) => s && typeof s === "object" && String((s as { status?: unknown }).status ?? "") === "active",
+    );
+    if (activeSplits.length > 0) {
+      for (const s of activeSplits) {
+        const o = s as { split1?: { amount?: unknown; dealCompletedAt?: unknown }; split2?: { amount?: unknown; dealCompletedAt?: unknown } };
+        for (const part of [o.split1, o.split2]) {
+          if (part?.amount == null || !Number.isFinite(Number(part.amount))) continue;
+          if (!splitPartIsDone(part.dealCompletedAt)) return true;
+        }
+      }
+      return false;
+    }
+  }
   return dto.periods.some((p) => p.amount != null && !p.dealCompletedAt);
 }
 
