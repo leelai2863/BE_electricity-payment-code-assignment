@@ -15,6 +15,8 @@ export type AuditAction =
   | "electric.invoice_patch"
   | "electric.bill_reset_period_superadmin"
   | "electric.manual_create"
+  | "electric.split_cancel"
+  | "electric.split_cancel_resolved_superadmin"
   | "agency.create"
   | "auth.login"
   | "accounting.thu_chi_create"

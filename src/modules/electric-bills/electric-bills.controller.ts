@@ -457,10 +457,25 @@ export async function cancelSplitHandler(req: Request, res: Response) {
   try {
     const splitId = String(req.params.splitId);
     const ent = await findSplitBillEntryById(splitId);
+    if (!ent) {
+      res.status(404).json({ error: "Không tìm thấy split" });
+      return;
+    }
+    const status = String((ent as { status?: unknown }).status ?? "");
     const locked =
       Boolean((ent as { lockedByThuChi?: boolean } | null)?.lockedByThuChi) ||
       String((ent as { createdBy?: string } | null)?.createdBy ?? "") === "thu-chi";
-    if (locked && !requestHasAdminOrSuperForSplitCancel(req)) {
+    const isSuperAdmin = requestHasSuperAdminRole(req);
+    const canAdminCancel = requestHasAdminOrSuperForSplitCancel(req);
+    if (locked && status === "resolved" && !isSuperAdmin) {
+      res.status(403).json({
+        error:
+          "Split Thu chi đã hoàn tất chỉ SUPER_ADMIN mới được hủy từ Danh sách hóa đơn.",
+        code: "SPLIT_THU_CHI_RESOLVED_SUPERADMIN_ONLY",
+      });
+      return;
+    }
+    if (locked && status !== "resolved" && !canAdminCancel) {
       res.status(403).json({
         error:
           "Split từ Thu chi: hủy từ Danh sách hóa đơn cần quyền ADMIN hoặc SUPER_ADMIN (mã về trạng thái trước hạ cước để Thu chi nhập lại). Các vai trò khác xóa/sửa dòng Thu chi tương ứng.",
@@ -468,7 +483,13 @@ export async function cancelSplitHandler(req: Request, res: Response) {
       });
       return;
     }
-    const result = await cancelBillSplit(splitId);
+    const result = await cancelBillSplit(splitId, {
+      allowResolvedForSuperAdmin: locked && status === "resolved" && isSuperAdmin,
+      actorUserId: req.fujiUserId ?? null,
+      auditLabels: fujiAuditActorLabelsFromRequest(req),
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Hủy tách mã thất bại");

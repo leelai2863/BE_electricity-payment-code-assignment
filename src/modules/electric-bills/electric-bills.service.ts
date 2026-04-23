@@ -2592,11 +2592,21 @@ async function restoreParentPeriodAfterActiveSplitCancelled(params: {
   }
 }
 
-export async function cancelBillSplit(splitId: string) {
+export type CancelBillSplitOptions = {
+  allowResolvedForSuperAdmin?: boolean;
+  actorUserId?: string | null;
+  auditLabels?: FujiAuditActorLabels | null;
+  ip?: string | null;
+  userAgent?: string | null;
+};
+
+export async function cancelBillSplit(splitId: string, opts?: CancelBillSplitOptions) {
   await ensureDb();
   const entry = await findSplitBillEntryById(splitId);
   if (!entry) throw new ServiceError(404, "Không tìm thấy split");
-  if (entry.status !== "active") {
+  const status = String(entry.status ?? "");
+  const allowResolved = Boolean(opts?.allowResolvedForSuperAdmin);
+  if (status !== "active" && !(allowResolved && status === "resolved")) {
     throw new ServiceError(409, "Split này không còn ở trạng thái đang tách để hủy");
   }
 
@@ -2643,6 +2653,30 @@ export async function cancelBillSplit(splitId: string) {
   const billDoc = await findElectricBillById(originalBillId);
   const base = billDoc ? serializeElectricBill(billDoc.toObject()) : null;
   const billPayload = base ? await attachActiveSplitsToSerializedBill(base) : undefined;
+
+  if (opts?.actorUserId && mongoose.isValidObjectId(opts.actorUserId)) {
+    await writeAuditLog({
+      actorUserId: String(opts.actorUserId),
+      action: status === "resolved" ? "electric.split_cancel_resolved_superadmin" : "electric.split_cancel",
+      entityType: "SplitBillEntry",
+      entityId: String(entry._id),
+      metadata: {
+        splitId: String(entry._id),
+        previousStatus: status,
+        nextStatus: "cancelled",
+        originalBillId,
+        originalKy,
+        customerCode: String(entry.customerCode ?? ""),
+        createdBy: String((entry as { createdBy?: string }).createdBy ?? "manual"),
+        lockedByThuChi: Boolean((entry as { lockedByThuChi?: boolean }).lockedByThuChi),
+        sourceThuChiId: (entry as { sourceThuChiId?: string | null }).sourceThuChiId ?? null,
+      },
+      ip: opts.ip ?? null,
+      userAgent: opts.userAgent ?? null,
+      actorEmail: opts.auditLabels?.actorEmail,
+      actorDisplayName: opts.auditLabels?.actorDisplayName,
+    });
+  }
 
   return {
     data: {
