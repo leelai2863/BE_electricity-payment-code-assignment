@@ -1,5 +1,5 @@
 import type { ElectricBillPeriod } from "@/types/electric-bill";
-import { isValidScanDdMm } from "@/lib/scan-ddmm";
+import { isValidScanDdMm, normalizeScanDdMmInput } from "@/lib/scan-ddmm";
 
 /** Đủ điều kiện ✓ hoàn tất cho một kỳ (chuyển Đi mail). */
 export function isPeriodReadyForDealCompletion(p: ElectricBillPeriod): boolean {
@@ -32,6 +32,10 @@ function splitPartAgencySatisfied(
   if (partIdx === 1 && splitIsThuChi) {
     return hasCatalog || (ag.length > 0 && dl.length > 0);
   }
+  // Phần "Còn lại · ĐL" của entry Thu chi: cho phép cùng cơ chế nhãn + ĐL TT (dữ liệu cũ / không có ObjectId).
+  if (partIdx === 2 && splitIsThuChi) {
+    return hasCatalog || (ag.length > 0 && dl.length > 0);
+  }
   return hasCatalog;
 }
 
@@ -45,7 +49,9 @@ export function splitSubperiodHasFullConfirmationData(
   splitMeta: { createdBy?: string | null; lockedByThuChi?: boolean | null }
 ): boolean {
   if (part.amount == null || !Number.isFinite(Number(part.amount))) return false;
-  const scan = part.scanDdMm != null ? String(part.scanDdMm).trim() : "";
+  let scan = part.scanDdMm != null ? String(part.scanDdMm).trim() : "";
+  const scanNorm = normalizeScanDdMmInput(scan);
+  if (scanNorm) scan = scanNorm;
   if (!scan || !isValidScanDdMm(scan)) return false;
   const ca = part.ca;
   if (ca !== "10h" && ca !== "16h" && ca !== "24h") return false;

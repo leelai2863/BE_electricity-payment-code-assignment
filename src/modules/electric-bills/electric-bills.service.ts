@@ -2443,8 +2443,13 @@ export async function patchSplitPeriod(
   await ensureDb();
   const existing = await findSplitBillEntryById(splitId);
   if (!existing) throw new ServiceError(404, "Không tìm thấy split");
-  const s1cur = (existing.split1 as unknown as Record<string, unknown>) ?? {};
-  const s2cur = (existing.split2 as unknown as Record<string, unknown>) ?? {};
+  // Mongoose subdocument: `{ ...existing.split2 }` thường không copy field → merge chỉ còn dealCompletedAt → 400 sai.
+  const plain = existing.toObject({ flattenMaps: true }) as {
+    split1?: Record<string, unknown>;
+    split2?: Record<string, unknown>;
+  };
+  const s1cur = { ...(plain.split1 ?? {}) };
+  const s2cur = { ...(plain.split2 ?? {}) };
   const next1 = splitIdx === 1 ? { ...s1cur, ...changes } : { ...s1cur };
   const next2 = splitIdx === 2 ? { ...s2cur, ...changes } : { ...s2cur };
   const splitMeta = {
