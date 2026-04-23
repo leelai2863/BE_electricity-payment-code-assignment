@@ -2423,21 +2423,25 @@ export async function patchSplitPeriod(
   ): Promise<Record<string, unknown>> => {
     if (!lockedByThuChi) return part;
     if (part.dealCompletedAt) return part;
+    // Chỉ self-heal phần split1 legacy của Hạ Cước.
+    // KHÔNG được tự heal split2 vì split2 phải chốt bằng thao tác xác nhận rõ ràng (nút ✓
+    // hoặc luồng thu-chi đợt 2 set dealCompletedAt tường minh), tránh auto "bay dòng" sai quy trình.
+    if (partIdx !== 1) return part;
     const payConfirmed = Boolean(part.paymentConfirmed);
     const cccdConfirmed = Boolean(part.cccdConfirmed);
     const hasScan = typeof part.scanDdMm === "string" && String(part.scanDdMm).trim().length > 0;
     const isHaCuocAgency =
       String(part.assignedAgencyName ?? "").trim().toLowerCase() === "hạ cước" ||
       String(part.assignedAgencyName ?? "").trim().toLowerCase() === "ha cuoc";
-    // Phần thu-chi trả sẽ luôn là "Hạ Cước" (phần 1), hoặc là phần 2 khi thu-chi đợt 2 đóng split.
+    // Phần self-heal bắt buộc là split1 có nhãn "Hạ Cước".
     if (!payConfirmed || !cccdConfirmed || !hasScan) return part;
-    if (partIdx === 1 && !isHaCuocAgency) return part;
+    if (!isHaCuocAgency) return part;
     const nowIso = new Date().toISOString();
     await patchSplitPeriodFields(splitId, partIdx, { dealCompletedAt: nowIso });
     return { ...part, dealCompletedAt: nowIso };
   };
   const healedS1 = await healThuChiPartIfNeeded(1, s1r);
-  const healedS2 = await healThuChiPartIfNeeded(2, s2r);
+  const healedS2 = s2r;
 
   const s1Done = Boolean(healedS1.dealCompletedAt);
   const s2Done = Boolean(healedS2.dealCompletedAt);
