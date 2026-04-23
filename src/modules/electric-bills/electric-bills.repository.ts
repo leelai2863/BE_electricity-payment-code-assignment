@@ -372,6 +372,28 @@ export async function findActiveSplitsByBillIds(billIds: string[]) {
   return SplitBillEntry.find({ originalBillId: { $in: billIds }, status: "active" }).lean();
 }
 
+/** Bill có split đang active — luôn thuộc luồng "chưa xác nhận" cho đến khi entry resolved. */
+export async function distinctOriginalBillIdsWithActiveSplits(): Promise<string[]> {
+  const raw = await SplitBillEntry.distinct("originalBillId", { status: "active" });
+  return raw.map((id) => String(id)).filter(Boolean);
+}
+
+export async function findActiveSplitKysByBillIds(billIds: string[]): Promise<Map<string, Set<number>>> {
+  const m = new Map<string, Set<number>>();
+  if (billIds.length === 0) return m;
+  const rows = await SplitBillEntry.find({ originalBillId: { $in: billIds }, status: "active" })
+    .select({ originalBillId: 1, originalKy: 1 })
+    .lean();
+  for (const r of rows) {
+    const bid = String((r as { originalBillId?: unknown }).originalBillId ?? "");
+    if (!bid) continue;
+    if (!m.has(bid)) m.set(bid, new Set());
+    const ky = Number((r as { originalKy?: unknown }).originalKy);
+    if (Number.isFinite(ky)) m.get(bid)!.add(ky);
+  }
+  return m;
+}
+
 /**
  * Tìm tất cả originalBillId có ít nhất 1 phần tách (split1/split2) thuộc đại lý khớp `agencyName`.
  * Dùng để filter `danh sách hóa đơn` theo đại lý khi mã hạ cước chỉ mang agency ở SplitBillEntry

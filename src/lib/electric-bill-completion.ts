@@ -12,3 +12,48 @@ export function isPeriodReadyForDealCompletion(p: ElectricBillPeriod): boolean {
   if (p.ca !== "10h" && p.ca !== "16h" && p.ca !== "24h") return false;
   return true;
 }
+
+/** Tên KH thật — loại placeholder UI ("Tên KH"). */
+export function isRealCustomerNameValue(customerName: unknown): boolean {
+  const t = customerName != null ? String(customerName).trim() : "";
+  if (!t) return false;
+  if (/^tên\s*kh$/i.test(t)) return false;
+  return true;
+}
+
+function splitPartAgencySatisfied(
+  part: Record<string, unknown>,
+  partIdx: 1 | 2,
+  splitIsThuChi: boolean
+): boolean {
+  const hasCatalog = part.assignedAgencyId != null && String(part.assignedAgencyId).trim().length > 0;
+  const ag = part.assignedAgencyName != null ? String(part.assignedAgencyName).trim() : "";
+  const dl = part.dlGiaoName != null ? String(part.dlGiaoName).trim() : "";
+  if (partIdx === 1 && splitIsThuChi) {
+    return hasCatalog || (ag.length > 0 && dl.length > 0);
+  }
+  return hasCatalog;
+}
+
+/**
+ * Đủ thông tin từ cột Ngày thanh toán trở đi (CA, Bill/CCCD, tên KH, thẻ, đại lý) để coi là có thể chốt ✓.
+ * Dùng API PATCH và kiểm tra bill chưa/đã xác nhận với hạ cước.
+ */
+export function splitSubperiodHasFullConfirmationData(
+  part: Record<string, unknown>,
+  partIdx: 1 | 2,
+  splitMeta: { createdBy?: string | null; lockedByThuChi?: boolean | null }
+): boolean {
+  if (part.amount == null || !Number.isFinite(Number(part.amount))) return false;
+  const scan = part.scanDdMm != null ? String(part.scanDdMm).trim() : "";
+  if (!scan || !isValidScanDdMm(scan)) return false;
+  const ca = part.ca;
+  if (ca !== "10h" && ca !== "16h" && ca !== "24h") return false;
+  if (!part.paymentConfirmed) return false;
+  if (!part.cccdConfirmed) return false;
+  if (!isRealCustomerNameValue(part.customerName)) return false;
+  const card = part.cardType != null ? String(part.cardType).trim() : "";
+  if (!card) return false;
+  const thuChi = splitMeta.createdBy === "thu-chi" || Boolean(splitMeta.lockedByThuChi);
+  return splitPartAgencySatisfied(part, partIdx, thuChi);
+}

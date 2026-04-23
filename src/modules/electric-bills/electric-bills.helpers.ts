@@ -245,12 +245,28 @@ export function buildInvoiceListMatch(params: InvoiceListParams): Record<string,
       periods: { $not: { $elemMatch: { amount: { $ne: null }, dealCompletedAt: null } } },
     });
   } else if (params.done === false || !params.includeArchived) {
-    and.push({
-      periods: { $elemMatch: { amount: { $ne: null }, dealCompletedAt: null } },
-    });
+    // Điều kiện "chưa xong" gồm cả bill đang có SplitBillEntry active — gắn trong getInvoiceList
+    // (distinctOriginalBillIdsWithActiveSplits + $or), tránh mất bill khi kỳ cha đã có dealCompletedAt nhầm.
   }
 
   return and.length > 0 ? { $and: and } : {};
+}
+
+/** Gộp thêm mệnh đề $and (Mongo) — dùng mở rộng match danh sách hóa đơn theo split active. */
+export function mergeMongoAndClause(
+  base: Record<string, unknown>,
+  clause: Record<string, unknown>
+): Record<string, unknown> {
+  const parts: Record<string, unknown>[] = [];
+  if (base && Object.keys(base).length > 0) {
+    if (Array.isArray(base.$and)) {
+      parts.push(...(base.$and as Record<string, unknown>[]));
+    } else {
+      parts.push(base);
+    }
+  }
+  parts.push(clause);
+  return { $and: parts };
 }
 
 export function invoiceListSort(

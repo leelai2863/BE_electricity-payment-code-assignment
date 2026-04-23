@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { writeAuditLog } from "@/lib/audit";
 import type { FujiAuditActorLabels } from "@/lib/fuji-actor";
 import { serializeElectricBill, billHasIncompletePeriod } from "@/lib/electric-bill-serialize";
-import { isPeriodReadyForDealCompletion } from "@/lib/electric-bill-completion";
+import { isPeriodReadyForDealCompletion, splitSubperiodHasFullConfirmationData } from "@/lib/electric-bill-completion";
 import { periodsDtoToMongoSchema } from "@/lib/electric-bill-mongo-periods";
 import { scanDdMmIsNotFuture } from "@/lib/scan-ddmm";
 import {
@@ -63,6 +63,8 @@ import {
   ensureRefundLineStateSplitPartIndex,
   countNonCancelledSplitsForBillKy,
   deleteRefundLineStatesForBillKy,
+  distinctOriginalBillIdsWithActiveSplits,
+  findActiveSplitKysByBillIds,
 } from "@/modules/electric-bills/electric-bills.repository";
 import { countHaCuocThuChiForBillKy } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 import {
@@ -79,6 +81,7 @@ import {
   completedAmountPeriods,
   parseInvoiceListParams,
   buildInvoiceListMatch,
+  mergeMongoAndClause,
   invoiceListSort,
   applyPeriodPatches,
   syncBillLevelFromPeriods,
@@ -93,6 +96,37 @@ import {
   buildRefundFinancialWarnings,
 } from "@/lib/mail-queue-thu-chi-merge";
 import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
+
+import type { InvoiceListParams } from "@/modules/electric-bills/electric-bills.helpers";
+
+async function augmentInvoiceListMongoMatch(
+  baseMatch: Record<string, unknown>,
+  params: InvoiceListParams
+): Promise<Record<string, unknown>> {
+  let m = baseMatch;
+  if (params.done === true) {
+    const ids = await distinctOriginalBillIdsWithActiveSplits();
+    const oids = ids
+      .filter((id) => mongoose.isValidObjectId(id))
+      .map((id) => new mongoose.Types.ObjectId(String(id)));
+    if (oids.length > 0) {
+      m = mergeMongoAndClause(m, { _id: { $nin: oids } });
+    }
+    return m;
+  }
+  if (params.done === false || !params.includeArchived) {
+    const ids = await distinctOriginalBillIdsWithActiveSplits();
+    const oids = ids
+      .filter((id) => mongoose.isValidObjectId(id))
+      .map((id) => new mongoose.Types.ObjectId(String(id)));
+    const orClauses: Record<string, unknown>[] = [
+      { periods: { $elemMatch: { amount: { $ne: null }, dealCompletedAt: null } } },
+    ];
+    if (oids.length > 0) orClauses.push({ _id: { $in: oids } });
+    m = mergeMongoAndClause(m, { $or: orClauses });
+  }
+  return m;
+}
 
 async function checkAssignedCodeConflict(
   customerCode: string,
@@ -189,7 +223,7 @@ export async function listUnassignedBills(query: Record<string, unknown>) {
 
 export async function getInvoiceList(query: Record<string, unknown>, scope?: AgencyReadScope) {
   const params = parseInvoiceListParams(query);
-  const match = buildInvoiceListMatch(params);
+  const match = await augmentInvoiceListMongoMatch(buildInvoiceListMatch(params), params);
   const agencyScopeId = typeof scope?.agencyScopeId === "string" ? scope.agencyScopeId.trim() : "";
   const agencyNameFilter = (params.assignedAgencyName ?? "").trim();
   const sort = invoiceListSort(params.sortBy, params.sortDir);
@@ -438,13 +472,16 @@ export async function getInvoiceCompletedMonths(scope?: AgencyReadScope) {
 
   try {
     const docs = await findBillsLean({}, { year: -1, month: -1 }, 5000);
+    const billIds = docs.map((d) => String((d as Record<string, unknown>)._id ?? ""));
+    const activeKyByBill = await findActiveSplitKysByBillIds(billIds);
     const seen = new Map<string, { year: number; month: number }>();
 
     for (const d of docs) {
       const bill = serializeElectricBill(d as Record<string, unknown>);
-      const completed = completedAmountPeriods(bill.periods).filter((p) =>
-        agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true
-      );
+      const skipKys = activeKyByBill.get(bill._id) ?? new Set();
+      const completed = completedAmountPeriods(bill.periods)
+        .filter((p) => !skipKys.has(Number(p.ky)))
+        .filter((p) => (agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true));
       if (completed.length === 0) continue;
       const k = `${bill.year}-${bill.month}`;
       if (!seen.has(k)) seen.set(k, { year: bill.year, month: bill.month });
@@ -474,13 +511,17 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
 
   try {
     const docs = await findBillsByYearMonth(year, month);
+    const billIdsRaw = docs.map((d) => String((d as Record<string, unknown>)._id ?? ""));
+    const activeKyByBill = await findActiveSplitKysByBillIds(billIdsRaw);
     const base = docs
       .map((d) => serializeElectricBill(d as Record<string, unknown>))
       .map((bill) => ({
         ...bill,
-        periods: completedAmountPeriods(bill.periods).filter((p) =>
-          agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true
-        ),
+        periods: completedAmountPeriods(bill.periods)
+          .filter((p) => !activeKyByBill.get(bill._id)?.has(Number(p.ky)))
+          .filter((p) =>
+            agencyScopeId ? String(p.assignedAgencyId ?? "").trim() === agencyScopeId : true
+          ),
       }))
       .map((bill) => omitEvnField(bill));
 
@@ -553,7 +594,8 @@ export async function getInvoiceCompleted(query: Record<string, unknown>, scope?
       const hasResolvedSplit = billHasResolvedSplit.has(String(b._id));
       if (!hasCompletedPeriods && !hasResolvedSplit) return false;
       if (agencyScopeId) {
-        return hasCompletedPeriods || b.splits.length > 0;
+        const hasResolvedScoped = b.splits.some((s) => String(s.status) === "resolved");
+        return hasCompletedPeriods || hasResolvedScoped;
       }
       return true;
     });
@@ -2399,6 +2441,43 @@ export async function patchSplitPeriod(
   changes: Record<string, unknown>
 ) {
   await ensureDb();
+  const existing = await findSplitBillEntryById(splitId);
+  if (!existing) throw new ServiceError(404, "Không tìm thấy split");
+  const s1cur = (existing.split1 as unknown as Record<string, unknown>) ?? {};
+  const s2cur = (existing.split2 as unknown as Record<string, unknown>) ?? {};
+  const next1 = splitIdx === 1 ? { ...s1cur, ...changes } : { ...s1cur };
+  const next2 = splitIdx === 2 ? { ...s2cur, ...changes } : { ...s2cur };
+  const splitMeta = {
+    createdBy: (existing as { createdBy?: string }).createdBy,
+    lockedByThuChi: Boolean((existing as { lockedByThuChi?: boolean }).lockedByThuChi),
+  };
+  const wantsDealThis =
+    changes.dealCompletedAt != null &&
+    changes.dealCompletedAt !== false &&
+    String(changes.dealCompletedAt).trim() !== "";
+  if (wantsDealThis) {
+    const partNext = splitIdx === 1 ? next1 : next2;
+    if (!splitSubperiodHasFullConfirmationData(partNext, splitIdx, splitMeta)) {
+      throw new ServiceError(
+        400,
+        "Chưa đủ thông tin từ ngày thanh toán trở đi (CA, Bill/CCCD, tên khách hàng, thẻ, đại lý) để xác nhận.",
+      );
+    }
+  }
+  const s1NextDone = Boolean(next1.dealCompletedAt);
+  const s2NextDone = Boolean(next2.dealCompletedAt);
+  if (s1NextDone && s2NextDone) {
+    if (
+      !splitSubperiodHasFullConfirmationData(next1, 1, splitMeta) ||
+      !splitSubperiodHasFullConfirmationData(next2, 2, splitMeta)
+    ) {
+      throw new ServiceError(
+        400,
+        "Không thể đóng hạ cước khi một phần chưa đủ thông tin (từ ngày thanh toán trở đi).",
+      );
+    }
+  }
+
   let entry = await patchSplitPeriodFields(splitId, splitIdx, changes);
   if (!entry) throw new ServiceError(404, "Không tìm thấy split");
 

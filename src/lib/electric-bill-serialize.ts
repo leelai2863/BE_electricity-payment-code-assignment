@@ -1,4 +1,5 @@
 ﻿import type { BillingScanHistoryRow, CaSlot, ElectricBillDto, ElectricBillPeriod } from "@/types/electric-bill";
+import { splitSubperiodHasFullConfirmationData } from "@/lib/electric-bill-completion";
 import type { ElectricBillRecordDocument } from "@/models/ElectricBillRecord";
 import type { BillingScanHistoryDocument } from "@/models/BillingScanHistory";
 
@@ -142,10 +143,21 @@ export function billHasIncompletePeriod(dto: ElectricBillDto & { splits?: unknow
     );
     if (activeSplits.length > 0) {
       for (const s of activeSplits) {
-        const o = s as { split1?: { amount?: unknown; dealCompletedAt?: unknown }; split2?: { amount?: unknown; dealCompletedAt?: unknown } };
-        for (const part of [o.split1, o.split2]) {
-          if (part?.amount == null || !Number.isFinite(Number(part.amount))) continue;
-          if (!splitPartIsDone(part.dealCompletedAt)) return true;
+        const o = s as {
+          split1?: Record<string, unknown>;
+          split2?: Record<string, unknown>;
+          createdBy?: string;
+          lockedByThuChi?: boolean;
+        };
+        const meta = { createdBy: o.createdBy ?? undefined, lockedByThuChi: o.lockedByThuChi };
+        for (const [idx, part] of [
+          [1, o.split1] as const,
+          [2, o.split2] as const,
+        ]) {
+          if (part == null || part.amount == null || !Number.isFinite(Number(part.amount))) return true;
+          const full = splitSubperiodHasFullConfirmationData(part, idx, meta);
+          const done = splitPartIsDone(part.dealCompletedAt);
+          if (!full || !done) return true;
         }
       }
       return false;
