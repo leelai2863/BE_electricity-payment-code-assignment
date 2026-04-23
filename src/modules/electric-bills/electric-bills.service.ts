@@ -63,6 +63,7 @@ import {
   ensureRefundLineStateSplitPartIndex,
   countNonCancelledSplitsForBillKy,
   deleteRefundLineStatesForBillKy,
+  deleteRefundLineStatesForBillKySplitParts,
   distinctOriginalBillIdsWithActiveSplits,
   findActiveSplitKysByBillIds,
 } from "@/modules/electric-bills/electric-bills.repository";
@@ -2465,7 +2466,7 @@ export async function patchSplitPeriod(
     if (!splitSubperiodHasFullConfirmationData(partNext, splitIdx, splitMeta)) {
       throw new ServiceError(
         400,
-        "Chưa đủ thông tin từ ngày thanh toán trở đi (CA, Bill/CCCD, tên khách hàng, thẻ, đại lý) để xác nhận.",
+        "Chưa đủ thông tin từ ngày thanh toán trở đi (CA, Bill/CCCD, tên khách hàng, đại lý) để xác nhận.",
       );
     }
   }
@@ -2478,7 +2479,7 @@ export async function patchSplitPeriod(
     ) {
       throw new ServiceError(
         400,
-        "Không thể đóng hạ cước khi một phần chưa đủ thông tin (từ ngày thanh toán trở đi).",
+        "Không thể đóng hạ cước khi một phần chưa đủ thông tin (ngày TT, CA, Bill/CCCD, tên KH, đại lý).",
       );
     }
   }
@@ -2527,6 +2528,60 @@ export async function patchSplitPeriod(
   };
 }
 
+type ParentAgencySnapshot = {
+  assignedAgencyId: string | null;
+  assignedAgencyName: string | null;
+  dlGiaoName: string | null;
+};
+
+/** Sau khi hủy split active: gỡ dealCompletedAt kỳ cha, khôi phục đại lý (nếu đã lưu snapshot Thu chi), gán lại AssignedCode tổng. */
+async function restoreParentPeriodAfterActiveSplitCancelled(params: {
+  originalBillId: string;
+  originalKy: 1 | 2 | 3;
+  parentAgencyBeforeHaCuoc: ParentAgencySnapshot | null;
+}) {
+  const doc = await findElectricBillById(params.originalBillId);
+  if (!doc) return;
+  const dto = serializeElectricBill(doc.toObject());
+  const oky = params.originalKy;
+  const snap = params.parentAgencyBeforeHaCuoc;
+
+  const nextPeriods = dto.periods.map((p) => {
+    if (p.ky !== oky) return p;
+    return {
+      ...p,
+      dealCompletedAt: null,
+      ...(snap
+        ? {
+            assignedAgencyId: snap.assignedAgencyId ?? null,
+            assignedAgencyName: snap.assignedAgencyName ?? null,
+            dlGiaoName: snap.dlGiaoName ?? null,
+          }
+        : {}),
+    };
+  });
+  doc.set("periods", periodsDtoToMongoSchema(nextPeriods) as typeof doc.periods);
+  syncBillLevelFromPeriods(doc, nextPeriods);
+  doc.markModified("periods");
+  await doc.save();
+
+  const restored = nextPeriods.find((p) => p.ky === oky);
+  const aid = snap?.assignedAgencyId != null ? String(snap.assignedAgencyId).trim() : "";
+  const an = snap?.assignedAgencyName != null ? String(snap.assignedAgencyName).trim() : "";
+  if (aid && an && restored?.amount != null) {
+    await upsertAssignedCodeDoc({
+      customerCode: doc.customerCode,
+      amount: restored.amount,
+      year: doc.year,
+      month: doc.month,
+      agencyId: aid,
+      agencyName: an,
+      billId: String(doc._id),
+      ky: oky,
+    });
+  }
+}
+
 export async function cancelBillSplit(splitId: string) {
   await ensureDb();
   const entry = await findSplitBillEntryById(splitId);
@@ -2535,7 +2590,24 @@ export async function cancelBillSplit(splitId: string) {
     throw new ServiceError(409, "Split này không còn ở trạng thái đang tách để hủy");
   }
 
-  const bill = await findElectricBillById(entry.originalBillId);
+  const originalBillId = String(entry.originalBillId);
+  const originalKy = entry.originalKy as 1 | 2 | 3;
+  const rawSnap = (entry as { parentAgencyBeforeHaCuoc?: ParentAgencySnapshot | null }).parentAgencyBeforeHaCuoc;
+  const parentSnap: ParentAgencySnapshot | null =
+    rawSnap &&
+    (rawSnap.assignedAgencyId != null ||
+      rawSnap.assignedAgencyName != null ||
+      rawSnap.dlGiaoName != null)
+      ? {
+          assignedAgencyId:
+            rawSnap.assignedAgencyId != null ? String(rawSnap.assignedAgencyId).trim() || null : null,
+          assignedAgencyName:
+            rawSnap.assignedAgencyName != null ? String(rawSnap.assignedAgencyName).trim() || null : null,
+          dlGiaoName: rawSnap.dlGiaoName != null ? String(rawSnap.dlGiaoName).trim() || null : null,
+        }
+      : null;
+
+  const bill = await findElectricBillById(originalBillId);
   if (bill) {
     const customerCode = bill.customerCode;
     const year = bill.year;
@@ -2548,11 +2620,17 @@ export async function cancelBillSplit(splitId: string) {
     if (s2Amount != null) {
       await deleteAssignedCodeDoc(customerCode, s2Amount, year, month);
     }
+    await deleteRefundLineStatesForBillKySplitParts(originalBillId, originalKy);
   }
 
   await cancelSplitBillEntry(splitId);
+  await restoreParentPeriodAfterActiveSplitCancelled({
+    originalBillId,
+    originalKy,
+    parentAgencyBeforeHaCuoc: parentSnap,
+  });
 
-  const billDoc = await findElectricBillById(entry.originalBillId);
+  const billDoc = await findElectricBillById(originalBillId);
   const base = billDoc ? serializeElectricBill(billDoc.toObject()) : null;
   const billPayload = base ? await attachActiveSplitsToSerializedBill(base) : undefined;
 

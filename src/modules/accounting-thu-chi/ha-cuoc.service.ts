@@ -8,6 +8,7 @@ import {
   findSplitBillEntryById,
   findElectricBillFullByCustomerYearMonth,
   updateSplitBillAmounts,
+  type ParentAgencyBeforeHaCuocSnapshot,
 } from "@/modules/electric-bills/electric-bills.repository";
 import { countOtherThuChiLinkedToSplit } from "@/modules/accounting-thu-chi/accounting-thu-chi.repository";
 import { cancelBillSplit, patchSplitPeriod } from "@/modules/electric-bills/electric-bills.service";
@@ -411,6 +412,31 @@ export async function applyHaCuocAfterThuChiSaved(params: {
   if (resolved.mode === "create") {
     let splitId: string | null = null;
     try {
+      const billBeforeSplit = await findElectricBillById(resolved.billId);
+      let parentAgencyBeforeHaCuoc: ParentAgencyBeforeHaCuocSnapshot | null = null;
+      if (billBeforeSplit) {
+        const periods = Array.isArray(billBeforeSplit.periods) ? billBeforeSplit.periods : [];
+        const pRow = periods.find((p) => Number((p as { ky?: unknown }).ky) === resolved.ky) as
+          | {
+              assignedAgencyId?: unknown;
+              assignedAgencyName?: unknown;
+              dlGiaoName?: unknown;
+            }
+          | undefined;
+        if (pRow) {
+          const aid = pRow.assignedAgencyId != null ? String(pRow.assignedAgencyId).trim() : "";
+          const an = pRow.assignedAgencyName != null ? String(pRow.assignedAgencyName).trim() : "";
+          const dl = pRow.dlGiaoName != null ? String(pRow.dlGiaoName).trim() : "";
+          if (aid || an || dl) {
+            parentAgencyBeforeHaCuoc = {
+              assignedAgencyId: aid || null,
+              assignedAgencyName: an || null,
+              dlGiaoName: dl || null,
+            };
+          }
+        }
+      }
+
       const entry = await createSplitBillEntry({
         originalBillId: resolved.billId,
         originalKy: resolved.ky,
@@ -437,6 +463,7 @@ export async function applyHaCuocAfterThuChiSaved(params: {
         createdBy: "thu-chi",
         sourceThuChiId: params.entryId,
         lockedByThuChi: true,
+        parentAgencyBeforeHaCuoc,
       });
       splitId = String(entry._id);
       await patchSplitPeriod(splitId, 1, {

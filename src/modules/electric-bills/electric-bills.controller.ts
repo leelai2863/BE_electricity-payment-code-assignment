@@ -1,4 +1,11 @@
 import type { Request, Response } from "express";
+
+function requestHasSuperAdminRole(req: Request): boolean {
+  return (
+    Array.isArray(req.fujiUserRoles) &&
+    req.fujiUserRoles.some((x) => String(x).trim().toUpperCase() === "SUPER_ADMIN")
+  );
+}
 import {
   fujiAuditActorLabelsFromRequest,
   mergeBodyWithFujiActor,
@@ -443,9 +450,10 @@ export async function cancelSplitHandler(req: Request, res: Response) {
     const locked =
       Boolean((ent as { lockedByThuChi?: boolean } | null)?.lockedByThuChi) ||
       String((ent as { createdBy?: string } | null)?.createdBy ?? "") === "thu-chi";
-    if (locked) {
-      res.status(410).json({
-        error: "Split từ Thu chi không hủy qua API này — xóa/sửa dòng Thu chi Hạ Cước tương ứng.",
+    if (locked && !requestHasSuperAdminRole(req)) {
+      res.status(403).json({
+        error:
+          "Split từ Thu chi: hủy từ Danh sách hóa đơn chỉ dành cho SUPER_ADMIN (mã sẽ về trạng thái trước hạ cước để Thu chi nhập lại). Các vai trò khác xóa/sửa dòng Thu chi tương ứng.",
         code: "SPLIT_THU_CHI_LOCKED",
       });
       return;

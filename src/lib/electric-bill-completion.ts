@@ -40,7 +40,7 @@ function splitPartAgencySatisfied(
 }
 
 /**
- * Đủ thông tin từ cột Ngày thanh toán trở đi (CA, Bill/CCCD, tên KH, thẻ, đại lý) để coi là có thể chốt ✓.
+ * Đủ thông tin từ cột Ngày thanh toán trở đi (CA, Bill/CCCD, tên KH, đại lý) để coi là có thể chốt ✓.
  * Dùng API PATCH và kiểm tra bill chưa/đã xác nhận với hạ cước.
  */
 export function splitSubperiodHasFullConfirmationData(
@@ -58,8 +58,6 @@ export function splitSubperiodHasFullConfirmationData(
   if (!part.paymentConfirmed) return false;
   if (!part.cccdConfirmed) return false;
   if (!isRealCustomerNameValue(part.customerName)) return false;
-  const card = part.cardType != null ? String(part.cardType).trim() : "";
-  if (!card) return false;
   const thuChi = splitMeta.createdBy === "thu-chi" || Boolean(splitMeta.lockedByThuChi);
   return splitPartAgencySatisfied(part, partIdx, thuChi);
 }

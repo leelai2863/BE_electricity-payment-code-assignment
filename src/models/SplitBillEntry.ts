@@ -34,6 +34,12 @@ const SplitBillEntrySchema = new Schema(
     createdBy: { type: String, enum: ["manual", "thu-chi"], default: "manual" },
     sourceThuChiId: { type: String, default: null, index: true },
     lockedByThuChi: { type: Boolean, default: false },
+    /** Lưu trước khi detach kỳ cha (Thu chi) — dùng khôi phục khi hủy tách từ Danh sách HĐ. */
+    parentAgencyBeforeHaCuoc: {
+      assignedAgencyId: { type: String, default: null },
+      assignedAgencyName: { type: String, default: null },
+      dlGiaoName: { type: String, default: null },
+    },
   },
   { timestamps: true }
 );

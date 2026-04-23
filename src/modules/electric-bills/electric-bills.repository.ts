@@ -323,6 +323,12 @@ type SplitPeriodData = {
   amount: number;
 };
 
+export type ParentAgencyBeforeHaCuocSnapshot = {
+  assignedAgencyId: string | null;
+  assignedAgencyName: string | null;
+  dlGiaoName: string | null;
+};
+
 export async function createSplitBillEntry(
   data: {
     originalBillId: string;
@@ -337,15 +343,18 @@ export async function createSplitBillEntry(
     createdBy?: "manual" | "thu-chi";
     sourceThuChiId?: string | null;
     lockedByThuChi?: boolean;
+    parentAgencyBeforeHaCuoc?: ParentAgencyBeforeHaCuocSnapshot | null;
   },
   opts?: { session?: mongoose.ClientSession }
 ) {
+  const { parentAgencyBeforeHaCuoc, ...rest } = data;
   const doc = {
-    ...data,
+    ...rest,
     status: "active" as const,
     createdBy: data.createdBy ?? "manual",
     sourceThuChiId: data.sourceThuChiId ?? null,
     lockedByThuChi: Boolean(data.lockedByThuChi ?? data.createdBy === "thu-chi"),
+    ...(parentAgencyBeforeHaCuoc != null ? { parentAgencyBeforeHaCuoc } : {}),
   };
   if (opts?.session) {
     const arr = await SplitBillEntry.create([doc], { session: opts.session });
@@ -488,6 +497,11 @@ export async function countNonCancelledSplitsForBillKy(
 
 export async function deleteRefundLineStatesForBillKy(billId: string, ky: 1 | 2 | 3) {
   return RefundLineState.deleteMany({ billId, ky });
+}
+
+/** Xóa trạng thái hoàn phí theo 2 phần tách (splitPart 1/2) khi hủy hạ cước. */
+export async function deleteRefundLineStatesForBillKySplitParts(billId: string, ky: 1 | 2 | 3) {
+  return RefundLineState.deleteMany({ billId, ky, splitPart: { $in: [1, 2] } });
 }
 
 /** Các tách mã đã kết thúc — dùng tạo dòng Hoàn tiền cho 2 mã con */
