@@ -846,7 +846,7 @@ function buildExportWindowMs(
   const selectedDayStart = utcMsFromVnLocal(exportDate.year, exportDate.month, exportDate.day, 0, 0, 0);
   if (exportShift === "ca1") {
     return {
-      startMs: selectedDayStart - 9 * 60 * 60 * 1000, // 15:00 ngày trước
+      startMs: selectedDayStart - 10 * 60 * 60 * 1000, // 14:00 ngày trước
       endMs: selectedDayStart + 9 * 60 * 60 * 1000, // 09:00 ngày chọn
     };
   }
@@ -927,6 +927,12 @@ export async function createRefundFeeRule(body: {
   effectiveFrom?: string;
   effectiveTo?: string | null;
   isActive?: boolean;
+}, ctx?: {
+  actorUserId?: string;
+  ip?: string | null;
+  userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
 }) {
   const agencyName = typeof body.agencyName === "string" ? body.agencyName.trim() : "";
   const feeName = typeof body.feeName === "string" ? body.feeName.trim() : "";
@@ -994,11 +1000,31 @@ export async function createRefundFeeRule(body: {
       isActive: body.isActive ?? true,
     });
 
-    return {
-      data: serializeRefundFeeRuleDoc(
-        doc.toObject() as Parameters<typeof serializeRefundFeeRuleDoc>[0]
-      ),
-    };
+    const payload = serializeRefundFeeRuleDoc(
+      doc.toObject() as Parameters<typeof serializeRefundFeeRuleDoc>[0]
+    );
+    await writeAuditLog({
+      actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+      action: "electric.refund_fee_rule_create",
+      entityType: "RefundFeeRule",
+      entityId: doc._id,
+      metadata: {
+        ruleId: String(doc._id),
+        agencyName,
+        statusLabel,
+        conditionType,
+        amountMin: conditionType === "amount" ? amountMin : null,
+        amountMax: conditionType === "amount" ? amountMax : null,
+        cardType: conditionType === "cardType" ? cardType : null,
+        pct,
+        isActive: Boolean(body.isActive ?? true),
+      },
+      ip: ctx?.ip ?? null,
+      userAgent: ctx?.userAgent ?? null,
+      actorEmail: ctx?.actorEmail,
+      actorDisplayName: ctx?.actorDisplayName,
+    });
+    return { data: payload };
   } catch (error) {
     throw new ServiceError(500, getErrorMessage(error, "Không lưu được"));
   }
@@ -1032,6 +1058,13 @@ export async function updateRefundFeeRule(
     effectiveFrom?: string;
     effectiveTo?: string | null;
     isActive?: boolean;
+  },
+  ctx?: {
+    actorUserId?: string;
+    ip?: string | null;
+    userAgent?: string | null;
+    actorEmail?: string | null;
+    actorDisplayName?: string | null;
   }
 ) {
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
@@ -1084,14 +1117,62 @@ export async function updateRefundFeeRule(
     isActive: body.isActive === undefined ? Boolean(existing.isActive ?? true) : Boolean(body.isActive),
   });
   if (!updated) throw new ServiceError(404, "Không tìm thấy rule phí");
+  await writeAuditLog({
+    actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+    action: "electric.refund_fee_rule_update",
+    entityType: "RefundFeeRule",
+    entityId: new mongoose.Types.ObjectId(id),
+    metadata: {
+      ruleId: id,
+      agencyName: updated.agencyName,
+      statusLabel: updated.statusLabel,
+      conditionType: updated.conditionType,
+      amountMin: updated.amountMin ?? null,
+      amountMax: updated.amountMax ?? null,
+      cardType: updated.cardType ?? null,
+      pct: updated.pct,
+      isActive: Boolean(updated.isActive),
+      changeSummary: "Cập nhật rule phí hoàn tiền",
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { data: serializeRefundFeeRuleDoc(updated.toObject()), source: "mongodb" };
 }
 
-export async function removeRefundFeeRule(id: string) {
+export async function removeRefundFeeRule(id: string, ctx?: {
+  actorUserId?: string;
+  ip?: string | null;
+  userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
+}) {
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   await ensureDb();
+  const before = await findRefundFeeRuleById(id);
+  if (!before) throw new ServiceError(404, "Không tìm thấy rule phí");
   const deleted = await deleteRefundFeeRuleById(id);
   if (!deleted) throw new ServiceError(404, "Không tìm thấy rule phí");
+  await writeAuditLog({
+    actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+    action: "electric.refund_fee_rule_delete",
+    entityType: "RefundFeeRule",
+    entityId: new mongoose.Types.ObjectId(id),
+    metadata: {
+      ruleId: id,
+      agencyName: before.agencyName,
+      statusLabel: before.statusLabel,
+      conditionType: before.conditionType,
+      pct: before.pct,
+      isActive: Boolean(before.isActive),
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { data: { deletedId: id }, source: "mongodb" };
 }
 
@@ -1349,6 +1430,12 @@ export async function patchRefundLineStates(
 export async function migrateRefundLocalStorage(body: {
   feeRules?: Array<{ agencyName: string; statusLabel: string; pct: number; effectiveFrom: string }>;
   lineItems?: RefundLinePatchBodyItem[];
+}, ctx?: {
+  actorUserId?: string;
+  ip?: string | null;
+  userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
 }) {
   const feeRulesIn = Array.isArray(body.feeRules) ? body.feeRules : [];
   const lineItems = Array.isArray(body.lineItems) ? body.lineItems : [];
@@ -1422,7 +1509,7 @@ export async function migrateRefundLocalStorage(body: {
       if (doc) outStates.push(serializeRefundLineStateDoc(doc.toObject()));
     }
 
-    return {
+    const payload = {
       data: {
         rulesInserted,
         lineStatesUpserted: outStates.length,
@@ -1430,6 +1517,23 @@ export async function migrateRefundLocalStorage(body: {
       },
       source: "mongodb",
     };
+    await writeAuditLog({
+      actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+      action: "electric.refund_migrate_localstorage",
+      entityType: "RefundMigration",
+      entityId: new mongoose.Types.ObjectId(),
+      metadata: {
+        rulesInputCount: feeRulesIn.length,
+        lineItemsInputCount: lineItems.length,
+        rulesInserted,
+        lineStatesUpserted: outStates.length,
+      },
+      ip: ctx?.ip ?? null,
+      userAgent: ctx?.userAgent ?? null,
+      actorEmail: ctx?.actorEmail,
+      actorDisplayName: ctx?.actorDisplayName,
+    });
+    return payload;
   } catch (error) {
     throw new ServiceError(500, getErrorMessage(error, "Migrate không thành công"));
   }
@@ -2212,24 +2316,89 @@ export async function getPendingBillList() {
   };
 }
 
-export async function markBillAsPending(id: string, note?: string) {
+export async function markBillAsPending(
+  id: string,
+  note?: string,
+  ctx?: {
+    actorUserId?: string;
+    ip?: string | null;
+    userAgent?: string | null;
+    actorEmail?: string | null;
+    actorDisplayName?: string | null;
+  }
+) {
   await ensureDb();
+  const before = await findElectricBillById(id);
   const doc = await setPendingBill(id, note);
   if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  await writeAuditLog({
+    actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+    action: "electric.pending_mark",
+    entityType: "ElectricBillRecord",
+    entityId: doc._id,
+    metadata: {
+      billId: String(doc._id),
+      customerCode: doc.customerCode,
+      month: doc.month,
+      year: doc.year,
+      prevPendingStatus: Boolean((before as { isPending?: boolean } | null)?.isPending),
+      nextPendingStatus: true,
+      note: note ?? null,
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { data: serializeElectricBill(doc as Record<string, unknown>), source: "mongodb" };
 }
 
-export async function markBillAsResolved(id: string) {
+export async function markBillAsResolved(
+  id: string,
+  ctx?: {
+    actorUserId?: string;
+    ip?: string | null;
+    userAgent?: string | null;
+    actorEmail?: string | null;
+    actorDisplayName?: string | null;
+  }
+) {
   await ensureDb();
+  const before = await findElectricBillById(id);
   const doc = await resolvePendingBill(id);
   if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  await writeAuditLog({
+    actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+    action: "electric.pending_resolve",
+    entityType: "ElectricBillRecord",
+    entityId: doc._id,
+    metadata: {
+      billId: String(doc._id),
+      customerCode: doc.customerCode,
+      month: doc.month,
+      year: doc.year,
+      prevPendingStatus: Boolean((before as { isPending?: boolean } | null)?.isPending),
+      nextPendingStatus: false,
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { data: serializeElectricBill(doc as Record<string, unknown>), source: "mongodb" };
 }
 
 export async function uploadPendingImage(
   id: string,
   imageField: "bill" | "cccd",
-  filePath: string
+  filePath: string,
+  ctx?: {
+    actorUserId?: string;
+    ip?: string | null;
+    userAgent?: string | null;
+    actorEmail?: string | null;
+    actorDisplayName?: string | null;
+  }
 ) {
   await ensureDb();
   const updates =
@@ -2238,6 +2407,22 @@ export async function uploadPendingImage(
       : { pendingCccdImagePath: filePath };
   const doc = await updatePendingBillImages(id, updates);
   if (!doc) throw new ServiceError(404, "Không tìm thấy hóa đơn");
+  await writeAuditLog({
+    actorUserId: resolveRefundPatchActorId(ctx?.actorUserId),
+    action: "electric.pending_upload_image",
+    entityType: "ElectricBillRecord",
+    entityId: doc._id,
+    metadata: {
+      billId: String(doc._id),
+      customerCode: doc.customerCode,
+      imageField,
+      storedPath: filePath,
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { data: serializeElectricBill(doc as Record<string, unknown>), source: "mongodb" };
 }
 
@@ -2442,6 +2627,11 @@ export type PatchSplitPeriodOptions = {
    * API HTTP (Danh sách hóa đơn) không được bật cờ này.
    */
   bypassDealCompletionGuard?: boolean;
+  actorUserId?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
 };
 
 export async function patchSplitPeriod(
@@ -2496,6 +2686,7 @@ export async function patchSplitPeriod(
 
   let entry = await patchSplitPeriodFields(splitId, splitIdx, changes);
   if (!entry) throw new ServiceError(404, "Không tìm thấy split");
+  const statusBefore = String(existing.status ?? "");
 
   const s1r = entry.split1 as unknown as Record<string, unknown>;
   const s2r = entry.split2 as unknown as Record<string, unknown>;
@@ -2525,6 +2716,29 @@ export async function patchSplitPeriod(
   const billDoc = await findElectricBillById(entry.originalBillId);
   const base = billDoc ? serializeElectricBill(billDoc.toObject()) : null;
   const billPayload = base ? await attachActiveSplitsToSerializedBill(base) : undefined;
+
+  if (opts?.actorUserId && mongoose.isValidObjectId(opts.actorUserId)) {
+    await writeAuditLog({
+      actorUserId: String(opts.actorUserId),
+      action: "electric.split_patch",
+      entityType: "SplitBillEntry",
+      entityId: String(entry._id),
+      metadata: {
+        splitId: String(entry._id),
+        splitIdx,
+        changes,
+        statusBefore,
+        statusAfter: String(entry.status ?? ""),
+        originalBillId: entry.originalBillId,
+        originalKy: entry.originalKy,
+        customerCode: entry.customerCode,
+      },
+      ip: opts.ip ?? null,
+      userAgent: opts.userAgent ?? null,
+      actorEmail: opts.actorEmail ?? null,
+      actorDisplayName: opts.actorDisplayName ?? null,
+    });
+  }
 
   return {
     data: {

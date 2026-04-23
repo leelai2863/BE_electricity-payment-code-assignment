@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import mongoose from "mongoose";
 
 function requestHasSuperAdminRole(req: Request): boolean {
   return (
@@ -21,6 +22,8 @@ import {
   mergeBodyWithFujiActor,
   requiredAgencyScopeIdForCustomer,
 } from "@/lib/fuji-actor";
+import { writeAuditLog } from "@/lib/audit";
+import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
 import type { PatchBody } from "@/modules/electric-bills/electric-bills.helpers";
 import {
   enqueueUnassignedPaymentDeadlineSync,
@@ -76,6 +79,12 @@ function customerAgencyScopeOr403(req: Request, res: Response): string | null | 
     res.status(403).json({ error: "Tài khoản đại lý chưa được gán phạm vi dữ liệu." });
     return "__denied__";
   }
+}
+
+function resolveAuditActorId(raw?: unknown): mongoose.Types.ObjectId {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (s && mongoose.isValidObjectId(s)) return new mongoose.Types.ObjectId(s);
+  return new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
 }
 
 export async function postDataExportAuditHandler(req: Request, res: Response) {
@@ -144,6 +153,28 @@ export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res
         requestedBy: body.requestedBy === "user" ? "user" : "system",
         targeted,
       });
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      await writeAuditLog({
+        actorUserId: resolveAuditActorId(body.actorUserId),
+        action: "electric.payment_deadline_sync_enqueue",
+        entityType: "PaymentDeadlineSyncQueue",
+        entityId: new mongoose.Types.ObjectId(),
+        metadata: {
+          targeted: true,
+          billId: targeted.billId,
+          ky: targeted.ky,
+          billingThang: targeted.billingThang,
+          billingNam: targeted.billingNam,
+          enqueued: result.enqueued,
+          duplicate: result.duplicate,
+          skipped: result.skipped,
+          cooldown: result.cooldown,
+        },
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
       res.json({ ...result, source: "payment_deadline_sync_queue" });
       return;
     }
@@ -151,6 +182,26 @@ export async function postUnassignedPaymentDeadlineSyncHandler(req: Request, res
       billIds: billIds as string[] | undefined,
       force: Boolean(body.force),
       requestedBy: body.requestedBy === "user" ? "user" : "system",
+    });
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    await writeAuditLog({
+      actorUserId: resolveAuditActorId(body.actorUserId),
+      action: "electric.payment_deadline_sync_enqueue",
+      entityType: "PaymentDeadlineSyncQueue",
+      entityId: new mongoose.Types.ObjectId(),
+      metadata: {
+        targeted: false,
+        force: Boolean(body.force),
+        billIdsCount: Array.isArray(billIds) ? billIds.length : 0,
+        enqueued: result.enqueued,
+        duplicate: result.duplicate,
+        skipped: result.skipped,
+        cooldown: result.cooldown,
+      },
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
     });
     res.json({ ...result, source: "payment_deadline_sync_queue" });
   } catch (error) {
@@ -217,7 +268,16 @@ export async function createRefundFeeRuleHandler(req: Request, res: Response) {
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục phí." });
       return;
     }
-    const result = await createRefundFeeRule(req.body);
+    const body = (req.body ?? {}) as Parameters<typeof createRefundFeeRule>[0];
+    const actorBody = mergeBodyWithFujiActor(req, {});
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await createRefundFeeRule(body, {
+      actorUserId: actorBody.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.status(201).json(result);
   } catch (error) {
     handleError(res, error, "Không lưu được");
@@ -247,7 +307,16 @@ export async function updateRefundFeeRuleHandler(req: Request, res: Response) {
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục phí." });
       return;
     }
-    const result = await updateRefundFeeRule(String(req.params.id), req.body);
+    const body = (req.body ?? {}) as Parameters<typeof updateRefundFeeRule>[1];
+    const actorBody = mergeBodyWithFujiActor(req, {});
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await updateRefundFeeRule(String(req.params.id), body, {
+      actorUserId: actorBody.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không cập nhật được");
@@ -262,7 +331,15 @@ export async function removeRefundFeeRuleHandler(req: Request, res: Response) {
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục phí." });
       return;
     }
-    const result = await removeRefundFeeRule(String(req.params.id));
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await removeRefundFeeRule(String(req.params.id), {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không xóa được");
@@ -300,7 +377,16 @@ export async function migrateRefundLocalStorageHandler(req: Request, res: Respon
       res.status(403).json({ error: "Tài khoản đại lý không được migrate dữ liệu cục bộ." });
       return;
     }
-    const result = await migrateRefundLocalStorage(req.body);
+    const body = (req.body ?? {}) as Parameters<typeof migrateRefundLocalStorage>[0];
+    const actorBody = mergeBodyWithFujiActor(req, {});
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await migrateRefundLocalStorage(body, {
+      actorUserId: actorBody.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Migrate không thành công");
@@ -391,8 +477,16 @@ export async function getPendingListHandler(req: Request, res: Response) {
 export async function setPendingHandler(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
-    const note = typeof req.body?.note === "string" ? req.body.note : undefined;
-    const result = await markBillAsPending(id, note);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const note = typeof body.note === "string" ? body.note : undefined;
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await markBillAsPending(id, note, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không đánh dấu được mã treo");
@@ -402,7 +496,15 @@ export async function setPendingHandler(req: Request, res: Response) {
 export async function resolvePendingHandler(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
-    const result = await markBillAsResolved(id);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await markBillAsResolved(id, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không giải treo được hóa đơn");
@@ -421,7 +523,15 @@ export async function uploadPendingImageHandler(req: Request, res: Response) {
       return;
     }
 
-    const result = await uploadPendingImage(id, imageField, file.path);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await uploadPendingImage(id, imageField, file.path, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Upload ảnh thất bại");
@@ -430,7 +540,26 @@ export async function uploadPendingImageHandler(req: Request, res: Response) {
 
 // ─── Hạ cước (Split bills) ───────────────────────────────────────────────────
 
-export async function createSplitHandler(_req: Request, res: Response) {
+export async function createSplitHandler(req: Request, res: Response) {
+  try {
+    const actorBody = mergeBodyWithFujiActor(req, {});
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    await writeAuditLog({
+      actorUserId: resolveAuditActorId(actorBody.actorUserId),
+      action: "electric.split_manual_disabled_attempt",
+      entityType: "SplitBillEntry",
+      entityId: new mongoose.Types.ObjectId(),
+      metadata: {
+        billId: String(req.params.id ?? "").trim() || null,
+      },
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
+  } catch {
+    // audit không chặn phản hồi endpoint deprecated
+  }
   res.status(410).json({
     error: "Tách mã thủ công đã tắt — chỉ thực hiện Hạ Cước qua trang Thu chi (nguồn «Hạ Cước»).",
     code: "SPLIT_MANUAL_DISABLED",
@@ -446,7 +575,15 @@ export async function patchSplitHandler(req: Request, res: Response) {
       return;
     }
     const changes = (req.body ?? {}) as Record<string, unknown>;
-    const result = await patchSplitPeriod(splitId, splitIdx as 1 | 2, changes);
+    const actorBody = mergeBodyWithFujiActor(req, {});
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await patchSplitPeriod(splitId, splitIdx as 1 | 2, changes, {
+      actorUserId: actorBody.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Cập nhật split thất bại");

@@ -600,6 +600,7 @@ export async function revertHaCuocContext(
       { code: "HA_CUOC_SPLIT_RESOLVED" },
     );
   }
+  
   if (status !== "active") {
     if (allowOmit) return true;
     throw new ServiceError(
@@ -646,6 +647,7 @@ export async function updateHaCuocSplitAmountsIfNeeded(params: {
       code: "HA_CUOC_SPLIT_RESOLVED",
     });
   }
+
   const splitId = params.ctx.createdSplitEntryId;
   if (!splitId) throw new ServiceError(500, "Thiếu liên kết split", { code: "HA_CUOC_INTERNAL" });
 

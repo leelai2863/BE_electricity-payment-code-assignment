@@ -103,6 +103,39 @@ function serializeHaCuocContext(ctx: HaCuocContextLean | null | undefined) {
   };
 }
 
+async function writeHaCuocAudit(
+  kind: "electric.ha_cuoc_apply" | "electric.ha_cuoc_adjust" | "electric.ha_cuoc_revert",
+  params: {
+    entryId: string;
+    ctx: HaCuocContextLean;
+    actor?: ThuChiAuditContext;
+    extra?: Record<string, unknown>;
+  }
+) {
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(params.actor?.actorUserId),
+    action: kind,
+    entityType: "AccountingThuChiEntry",
+    entityId: new mongoose.Types.ObjectId(params.entryId),
+    metadata: {
+      entryId: params.entryId,
+      customerCode: params.ctx.customerCode,
+      targetBillId: params.ctx.targetBillId,
+      targetKy: params.ctx.targetKy,
+      targetMonth: params.ctx.targetMonth,
+      targetYear: params.ctx.targetYear,
+      splitAmount1: params.ctx.splitAmount1,
+      createdSplitEntryId: params.ctx.createdSplitEntryId ?? null,
+      resolvedExistingSplit: Boolean(params.ctx.resolvedExistingSplit),
+      ...(params.extra ?? {}),
+    },
+    ip: params.actor?.ip ?? null,
+    userAgent: params.actor?.userAgent ?? null,
+    actorEmail: params.actor?.actorEmail,
+    actorDisplayName: params.actor?.actorDisplayName,
+  });
+}
+
 async function resolveAgencyLinkForSource(sourceRaw: string): Promise<{
   linkedAgencyId: mongoose.Types.ObjectId | null;
   linkedAgencyCode: string | null;
@@ -358,6 +391,20 @@ export async function createThuChi(body: Record<string, unknown>, ctx?: ThuChiAu
       actorEmail: ctx?.actorEmail,
       actorDisplayName: ctx?.actorDisplayName,
     });
+    const createdHa = row.haCuocContext as HaCuocContextLean | null | undefined;
+    if (createdHa?.kind === "HA_CUOC") {
+      await writeHaCuocAudit("electric.ha_cuoc_apply", {
+        entryId: String(oid),
+        ctx: createdHa,
+        actor: ctx,
+        extra: {
+          chiVnd: chi,
+          source: sourceTrim,
+          effectivePaymentDate: effectivePaymentDate ? effectivePaymentDate.toISOString() : null,
+          txnDate: txnDate.toISOString(),
+        },
+      });
+    }
     return { data: serializeDoc(row), source: "mongodb" as const };
   } catch (error) {
     if (error instanceof ServiceError) throw error;
@@ -566,6 +613,37 @@ export async function updateThuChi(id: string, body: Record<string, unknown>, ct
       actorEmail: ctx?.actorEmail,
       actorDisplayName: ctx?.actorDisplayName,
     });
+    const nextHa = (updated as { haCuocContext?: HaCuocContextLean | null }).haCuocContext ?? null;
+    if (!oldHa && nextHa?.kind === "HA_CUOC") {
+      await writeHaCuocAudit("electric.ha_cuoc_apply", {
+        entryId: id,
+        ctx: nextHa,
+        actor: ctx,
+        extra: {
+          reason: "update_convert_to_ha_cuoc",
+        },
+      });
+    } else if (oldHa?.kind === "HA_CUOC" && !nextHa) {
+      await writeHaCuocAudit("electric.ha_cuoc_revert", {
+        entryId: id,
+        ctx: oldHa,
+        actor: ctx,
+        extra: {
+          reason: "update_remove_ha_cuoc",
+          omittedIrreversible: false,
+        },
+      });
+    } else if (oldHa?.kind === "HA_CUOC" && nextHa?.kind === "HA_CUOC" && oldHa.splitAmount1 !== nextHa.splitAmount1) {
+      await writeHaCuocAudit("electric.ha_cuoc_adjust", {
+        entryId: id,
+        ctx: nextHa,
+        actor: ctx,
+        extra: {
+          prevSplitAmount1: oldHa.splitAmount1,
+          nextSplitAmount1: nextHa.splitAmount1,
+        },
+      });
+    }
     return { data: serializeDoc(updated as Record<string, unknown>), source: "mongodb" as const };
   } catch (error) {
     if (error instanceof ServiceError) throw error;
@@ -630,6 +708,17 @@ export async function removeThuChi(id: string, ctx?: ThuChiAuditContext) {
     actorEmail: ctx?.actorEmail,
     actorDisplayName: ctx?.actorDisplayName,
   });
+  if (snapshot?.haCuocContext?.kind === "HA_CUOC") {
+    await writeHaCuocAudit("electric.ha_cuoc_revert", {
+      entryId: id,
+      ctx: snapshot.haCuocContext,
+      actor: ctx,
+      extra: {
+        reason: "delete_thu_chi",
+        omittedIrreversible: haCuocOmittedIrreversible,
+      },
+    });
+  }
   return { ok: true, source: "mongodb" as const };
 }
 
@@ -655,29 +744,78 @@ export async function listThuChiBankCatalog(query: Record<string, unknown>) {
   }
 }
 
-export async function createThuChiBankCatalog(body: Record<string, unknown>) {
+export async function createThuChiBankCatalog(body: Record<string, unknown>, ctx?: ThuChiAuditContext) {
   await ensureDb();
   const bank = typeof body.bank === "string" ? body.bank.trim() : "";
   if (!bank) throw new ServiceError(400, "bank không hợp lệ");
   await upsertBankCatalog(bank);
+  const doc = (await listBankCatalog({ q: bank, limit: 1 }))[0];
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(ctx?.actorUserId),
+    action: "accounting.thu_chi_bank_catalog_create",
+    entityType: "AccountingThuChiBankCatalog",
+    entityId: doc?._id ?? new mongoose.Types.ObjectId(),
+    metadata: {
+      entryId: doc?._id ? String(doc._id) : null,
+      bank: doc?.bankDisplay ?? bank,
+      usageCount: Number(doc?.usageCount ?? 0),
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { ok: true, source: "mongodb" as const };
 }
 
-export async function updateThuChiBankCatalog(id: string, body: Record<string, unknown>) {
+export async function updateThuChiBankCatalog(id: string, body: Record<string, unknown>, ctx?: ThuChiAuditContext) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const before = await listBankCatalog({ q: "", limit: 1000 }).then((x) => x.find((it) => String(it._id) === id) ?? null);
   const bank = typeof body.bank === "string" ? body.bank.trim() : "";
   if (!bank) throw new ServiceError(400, "bank không hợp lệ");
   const ok = await updateBankCatalogById(id, bank);
   if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng");
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(ctx?.actorUserId),
+    action: "accounting.thu_chi_bank_catalog_update",
+    entityType: "AccountingThuChiBankCatalog",
+    entityId: new mongoose.Types.ObjectId(id),
+    metadata: {
+      entryId: id,
+      bankBefore: before?.bankDisplay ?? null,
+      bankAfter: bank,
+      changeSummary: "Cập nhật tên ngân hàng danh mục Thu chi",
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { ok: true, source: "mongodb" as const };
 }
 
-export async function deleteThuChiBankCatalog(id: string) {
+export async function deleteThuChiBankCatalog(id: string, ctx?: ThuChiAuditContext) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
+  const before = await listBankCatalog({ q: "", limit: 1000 }).then((x) => x.find((it) => String(it._id) === id) ?? null);
   const ok = await deleteBankCatalogById(id);
   if (!ok) throw new ServiceError(404, "Không tìm thấy ngân hàng");
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(ctx?.actorUserId),
+    action: "accounting.thu_chi_bank_catalog_delete",
+    entityType: "AccountingThuChiBankCatalog",
+    entityId: new mongoose.Types.ObjectId(id),
+    metadata: {
+      entryId: id,
+      bank: before?.bankDisplay ?? null,
+      usageCount: before?.usageCount ?? null,
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { ok: true, source: "mongodb" as const };
 }
 
@@ -705,15 +843,32 @@ export async function listThuChiSourceCatalog(query: Record<string, unknown>) {
   }
 }
 
-export async function createThuChiSourceCatalog(body: Record<string, unknown>) {
+export async function createThuChiSourceCatalog(body: Record<string, unknown>, ctx?: ThuChiAuditContext) {
   await ensureDb();
   const source = typeof body.source === "string" ? body.source.trim() : "";
   if (!source) throw new ServiceError(400, "source không hợp lệ");
   await upsertSourceCatalog(source);
+  const doc = (await listSourceCatalog({ q: source, limit: 1 }))[0];
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(ctx?.actorUserId),
+    action: "accounting.thu_chi_source_catalog_create",
+    entityType: "AccountingThuChiSourceCatalog",
+    entityId: doc?._id ?? new mongoose.Types.ObjectId(),
+    metadata: {
+      entryId: doc?._id ? String(doc._id) : null,
+      source: doc?.sourceDisplay ?? source,
+      usageCount: Number(doc?.usageCount ?? 0),
+      system: Boolean(doc?.system),
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { ok: true, source: "mongodb" as const };
 }
 
-export async function updateThuChiSourceCatalog(id: string, body: Record<string, unknown>) {
+export async function updateThuChiSourceCatalog(id: string, body: Record<string, unknown>, ctx?: ThuChiAuditContext) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   const cur = await getSourceCatalogEntryById(id);
@@ -724,10 +879,27 @@ export async function updateThuChiSourceCatalog(id: string, body: Record<string,
   if (!source) throw new ServiceError(400, "source không hợp lệ");
   const ok = await updateSourceCatalogById(id, source);
   if (!ok) throw new ServiceError(404, "Không tìm thấy nguồn ngoài");
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(ctx?.actorUserId),
+    action: "accounting.thu_chi_source_catalog_update",
+    entityType: "AccountingThuChiSourceCatalog",
+    entityId: new mongoose.Types.ObjectId(id),
+    metadata: {
+      entryId: id,
+      sourceBefore: cur?.sourceDisplay ?? null,
+      sourceAfter: source,
+      system: Boolean(cur?.system),
+      changeSummary: "Cập nhật nguồn danh mục Thu chi",
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { ok: true, source: "mongodb" as const };
 }
 
-export async function deleteThuChiSourceCatalog(id: string) {
+export async function deleteThuChiSourceCatalog(id: string, ctx?: ThuChiAuditContext) {
   await ensureDb();
   if (!mongoose.isValidObjectId(id)) throw new ServiceError(400, "id không hợp lệ");
   const cur = await getSourceCatalogEntryById(id);
@@ -736,5 +908,20 @@ export async function deleteThuChiSourceCatalog(id: string) {
   }
   const ok = await deleteSourceCatalogById(id);
   if (!ok) throw new ServiceError(404, "Không tìm thấy nguồn ngoài");
+  await writeAuditLog({
+    actorUserId: resolveThuChiActorId(ctx?.actorUserId),
+    action: "accounting.thu_chi_source_catalog_delete",
+    entityType: "AccountingThuChiSourceCatalog",
+    entityId: new mongoose.Types.ObjectId(id),
+    metadata: {
+      entryId: id,
+      source: cur?.sourceDisplay ?? null,
+      system: Boolean(cur?.system),
+    },
+    ip: ctx?.ip ?? null,
+    userAgent: ctx?.userAgent ?? null,
+    actorEmail: ctx?.actorEmail,
+    actorDisplayName: ctx?.actorDisplayName,
+  });
   return { ok: true, source: "mongodb" as const };
 }

@@ -3,6 +3,7 @@
 import { Request, Response } from "express";
 import { AgenciesService } from "./agencies.service";
 import { isMongoDuplicateKeyError } from "@/lib/agency-repository";
+import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 
 export const AgenciesController = {
   async list(req: Request, res: Response) {
@@ -28,9 +29,17 @@ export const AgenciesController = {
   async create(req: Request, res: Response) {
     const { name = "", code } = req.body;
     try {
+      const actorBody = mergeBodyWithFujiActor(req, {});
+      const labels = fujiAuditActorLabelsFromRequest(req);
       const data = await AgenciesService.createNewAgency({ 
         name: String(name), 
         code: code ? String(code) : undefined 
+      }, {
+        actorUserId: actorBody.actorUserId as string | undefined,
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
       });
       res.json({ data });
     } catch (e) {
@@ -48,7 +57,15 @@ export const AgenciesController = {
     const id = String(req.params.id ?? "");
     const name = String(req.body.name ?? "");
     try {
-      const data = await AgenciesService.updateName(id, name);
+      const actorBody = mergeBodyWithFujiActor(req, {});
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      const data = await AgenciesService.updateName(id, name, {
+        actorUserId: actorBody.actorUserId as string | undefined,
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
       res.json({ data });
     } catch (e: any) {
       const status = e.message === "Không tìm thấy đại lý" ? 404 : 400;
@@ -59,7 +76,15 @@ export const AgenciesController = {
   async delete(req: Request, res: Response) {
     const id = String(req.params.id ?? "");
     try {
-      await AgenciesService.removeAgency(id);
+      const actorBody = mergeBodyWithFujiActor(req, {});
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      await AgenciesService.removeAgency(id, {
+        actorUserId: actorBody.actorUserId as string | undefined,
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
       res.json({ ok: true });
     } catch (e: any) {
       const status = e.message === "Không tìm thấy đại lý" ? 404 : 400;

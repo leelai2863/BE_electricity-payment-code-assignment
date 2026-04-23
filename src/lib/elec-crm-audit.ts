@@ -11,6 +11,19 @@ function auditActionForCentral(mongoAction: AuditAction): string {
     "electric.invoice_patch": "elec.invoice_patch",
     "electric.bill_reset_period_superadmin": "elec.bill_reset_period_superadmin",
     "electric.manual_create": "elec.manual_create",
+    "electric.ha_cuoc_apply": "elec.ha_cuoc.apply",
+    "electric.ha_cuoc_adjust": "elec.ha_cuoc.adjust",
+    "electric.ha_cuoc_revert": "elec.ha_cuoc.revert",
+    "electric.pending_mark": "elec.pending.mark",
+    "electric.pending_resolve": "elec.pending.resolve",
+    "electric.pending_upload_image": "elec.pending.upload_image",
+    "electric.refund_fee_rule_create": "elec.refund_fee_rule.create",
+    "electric.refund_fee_rule_update": "elec.refund_fee_rule.update",
+    "electric.refund_fee_rule_delete": "elec.refund_fee_rule.delete",
+    "electric.split_patch": "elec.split.patch",
+    "electric.payment_deadline_sync_enqueue": "elec.payment_deadline_sync.enqueue",
+    "electric.refund_migrate_localstorage": "elec.refund_migrate_localstorage",
+    "electric.split_manual_disabled_attempt": "elec.split.manual_disabled_attempt",
     "voucher.assign": "elec.voucher.assign",
     "voucher.upload_ocr": "elec.voucher.upload_ocr",
     "voucher.profile_update": "elec.voucher.profile_update",
@@ -24,10 +37,23 @@ function auditActionForCentral(mongoAction: AuditAction): string {
     "billing_scan.revoke_scan_approval": "elec.billing_scan.revoke_scan_approval",
     "checkbill.ingest_charges_snapshot": "elec.checkbill.ingest_charges_snapshot",
     "agency.create": "elec.agency.create",
+    "agency.update": "elec.agency.update",
+    "agency.delete": "elec.agency.delete",
+    "customer_account.import": "elec.customer_account.import",
+    "customer_account.update": "elec.customer_account.update",
+    "customer_account.delete": "elec.customer_account.delete",
+    "dev_tools.purge_mock_data": "elec.dev_tools.purge_mock_data",
+    "billing_scan.deprecated_job_access": "elec.billing_scan.deprecated_job_access",
     "auth.login": "elec.auth.login",
     "accounting.thu_chi_create": "elec.accounting.thu_chi_create",
     "accounting.thu_chi_update": "elec.accounting.thu_chi_update",
     "accounting.thu_chi_delete": "elec.accounting.thu_chi_delete",
+    "accounting.thu_chi_bank_catalog_create": "elec.accounting.thu_chi_bank_catalog_create",
+    "accounting.thu_chi_bank_catalog_update": "elec.accounting.thu_chi_bank_catalog_update",
+    "accounting.thu_chi_bank_catalog_delete": "elec.accounting.thu_chi_bank_catalog_delete",
+    "accounting.thu_chi_source_catalog_create": "elec.accounting.thu_chi_source_catalog_create",
+    "accounting.thu_chi_source_catalog_update": "elec.accounting.thu_chi_source_catalog_update",
+    "accounting.thu_chi_source_catalog_delete": "elec.accounting.thu_chi_source_catalog_delete",
     "electric.refund_line_patch": "elec.refund.line_patch",
     "electric.data_export": "elec.data_export",
   };
@@ -62,6 +88,64 @@ function buildViSummary(
       const mo = m.month != null && m.year != null ? ` tháng ${m.month}/${m.year}` : "";
       return code ? `Thêm hóa đơn tay mã KH ${code}${mo}.` : `Thêm hóa đơn tay (${entityType}).`;
     }
+    case "electric.ha_cuoc_apply": {
+      const code = String(m.customerCode ?? "").trim();
+      const ky = m.targetKy != null ? ` kỳ ${String(m.targetKy)}` : "";
+      const chi = m.chiVnd != null ? `, chi ${Number(m.chiVnd).toLocaleString("vi-VN")} đ` : "";
+      return `Hạ cước — tạo/gắn Thu chi${code ? ` cho mã ${code}` : ""}${ky}${chi}.`;
+    }
+    case "electric.ha_cuoc_adjust": {
+      const code = String(m.customerCode ?? "").trim();
+      const before = m.prevSplitAmount1 != null ? Number(m.prevSplitAmount1) : null;
+      const after = m.nextSplitAmount1 != null ? Number(m.nextSplitAmount1) : null;
+      const delta =
+        before != null && after != null
+          ? ` (chi đợt 1 ${before.toLocaleString("vi-VN")} → ${after.toLocaleString("vi-VN")} đ)`
+          : "";
+      return `Hạ cước — điều chỉnh Thu chi${code ? ` mã ${code}` : ""}${delta}.`;
+    }
+    case "electric.ha_cuoc_revert": {
+      const code = String(m.customerCode ?? "").trim();
+      const omitted = Boolean(m.omittedIrreversible);
+      return omitted
+        ? `Hạ cước — xóa Thu chi và bỏ qua hoàn tác split đã chốt${code ? ` (mã ${code})` : ""}.`
+        : `Hạ cước — hoàn tác liên kết split khi sửa/xóa Thu chi${code ? ` (mã ${code})` : ""}.`;
+    }
+    case "electric.pending_mark": {
+      const code = String(m.customerCode ?? "").trim();
+      return `Mã treo — đánh dấu treo${code ? ` (${code})` : ""}${m.note ? `: ${String(m.note)}` : ""}.`;
+    }
+    case "electric.pending_resolve": {
+      const code = String(m.customerCode ?? "").trim();
+      return `Mã treo — giải treo${code ? ` (${code})` : ""}.`;
+    }
+    case "electric.pending_upload_image": {
+      const code = String(m.customerCode ?? "").trim();
+      const field = String(m.imageField ?? "").trim();
+      return `Mã treo — tải ảnh ${field || "chứng từ"}${code ? ` cho mã ${code}` : ""}.`;
+    }
+    case "electric.refund_fee_rule_create":
+      return `Hoàn phí — tạo rule phí cho đại lý «${String(m.agencyName ?? "")}».`;
+    case "electric.refund_fee_rule_update":
+      return `Hoàn phí — cập nhật rule phí ${String(m.ruleId ?? "")}.`;
+    case "electric.refund_fee_rule_delete":
+      return `Hoàn phí — xóa rule phí ${String(m.ruleId ?? "")}.`;
+    case "electric.split_patch":
+      return `Hạ cước — cập nhật split ${String(m.splitId ?? "")} phần ${String(m.splitIdx ?? "")}.`;
+    case "electric.payment_deadline_sync_enqueue": {
+      const targeted = Boolean(m.targeted);
+      const enq = Number(m.enqueued ?? 0);
+      const dup = Number(m.duplicate ?? 0);
+      const skipped = Number(m.skipped ?? 0);
+      const cool = Number(m.cooldown ?? 0);
+      return targeted
+        ? `Hàng chờ giao mã — xếp hàng đồng bộ hạn TT theo kỳ đích (queued ${enq}, duplicate ${dup}, skipped ${skipped}, cooldown ${cool}).`
+        : `Hàng chờ giao mã — xếp hàng đồng bộ hạn TT hàng loạt (queued ${enq}, duplicate ${dup}, skipped ${skipped}, cooldown ${cool}).`;
+    }
+    case "electric.refund_migrate_localstorage":
+      return `Hoàn tiền — migrate dữ liệu localStorage (rules ${Number(m.rulesInserted ?? 0)}, line states ${Number(m.lineStatesUpserted ?? 0)}).`;
+    case "electric.split_manual_disabled_attempt":
+      return "Từ chối tách mã thủ công (đã tắt, chỉ cho phép qua Thu chi Hạ cước).";
     case "voucher.upload_ocr": {
       const fc = Array.isArray(m.fields) ? m.fields.length : Number(m.fieldsCount ?? 0) || 0;
       return `OCR / trích xuất voucher (${fc} trường).`;
@@ -105,6 +189,20 @@ function buildViSummary(
       return "Hoàn tất job quét cước (deprecated).";
     case "agency.create":
       return "Tạo đại lý.";
+    case "agency.update":
+      return `Cập nhật đại lý (${String(m.agencyId ?? "")}).`;
+    case "agency.delete":
+      return `Xóa mềm đại lý (${String(m.agencyId ?? "")}).`;
+    case "customer_account.import":
+      return `Import tài khoản khách hàng (${Number(m.totalCount ?? 0)} dòng).`;
+    case "customer_account.update":
+      return `Cập nhật tài khoản khách hàng (${String(m.accountId ?? "")}).`;
+    case "customer_account.delete":
+      return `Xóa tài khoản khách hàng (${String(m.accountId ?? "")}).`;
+    case "dev_tools.purge_mock_data":
+      return `Dev tools — purge mock data (${Number(m.collectionsAffected ?? 0)} collections).`;
+    case "billing_scan.deprecated_job_access":
+      return "Truy cập endpoint billing scan jobs đã deprecated.";
     case "auth.login":
       return "Đăng nhập (elec).";
     case "accounting.thu_chi_create": {
@@ -123,6 +221,18 @@ function buildViSummary(
       const id = String(m.entryId ?? "").trim();
       return `Kế toán — xóa dòng thu chi${id ? ` (${id})` : ""}.`;
     }
+    case "accounting.thu_chi_bank_catalog_create":
+      return `Kế toán — thêm danh mục ngân hàng thu chi (${String(m.bank ?? "")}).`;
+    case "accounting.thu_chi_bank_catalog_update":
+      return `Kế toán — sửa danh mục ngân hàng thu chi (${String(m.entryId ?? "")}).`;
+    case "accounting.thu_chi_bank_catalog_delete":
+      return `Kế toán — xóa danh mục ngân hàng thu chi (${String(m.entryId ?? "")}).`;
+    case "accounting.thu_chi_source_catalog_create":
+      return `Kế toán — thêm danh mục nguồn thu chi (${String(m.source ?? "")}).`;
+    case "accounting.thu_chi_source_catalog_update":
+      return `Kế toán — sửa danh mục nguồn thu chi (${String(m.entryId ?? "")}).`;
+    case "accounting.thu_chi_source_catalog_delete":
+      return `Kế toán — xóa danh mục nguồn thu chi (${String(m.entryId ?? "")}).`;
     case "electric.refund_line_patch": {
       const mkh = String(m.customerCode ?? "").trim();
       const ky = m.ky != null ? ` kỳ ${m.ky}` : "";

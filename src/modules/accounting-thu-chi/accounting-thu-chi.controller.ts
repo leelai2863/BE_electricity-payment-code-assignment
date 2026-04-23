@@ -223,7 +223,15 @@ export async function createThuChiBankCatalogHandler(req: Request, res: Response
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục ngân hàng." });
       return;
     }
-    const result = await createThuChiBankCatalog((req.body ?? {}) as Record<string, unknown>);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await createThuChiBankCatalog(body, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.status(201).json(result);
   } catch (error) {
     handleError(res, error, "Không tạo được ngân hàng");
@@ -243,7 +251,15 @@ export async function updateThuChiBankCatalogHandler(req: Request, res: Response
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục ngân hàng." });
       return;
     }
-    const result = await updateThuChiBankCatalog(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await updateThuChiBankCatalog(String(req.params.id), body, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không cập nhật được ngân hàng");
@@ -263,7 +279,15 @@ export async function deleteThuChiBankCatalogHandler(req: Request, res: Response
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục ngân hàng." });
       return;
     }
-    const result = await deleteThuChiBankCatalog(String(req.params.id));
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await deleteThuChiBankCatalog(String(req.params.id), {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không xóa được ngân hàng");
@@ -303,7 +327,15 @@ export async function createThuChiSourceCatalogHandler(req: Request, res: Respon
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục nguồn ngoài." });
       return;
     }
-    const result = await createThuChiSourceCatalog((req.body ?? {}) as Record<string, unknown>);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await createThuChiSourceCatalog(body, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.status(201).json(result);
   } catch (error) {
     handleError(res, error, "Không tạo được nguồn ngoài");
@@ -323,7 +355,15 @@ export async function updateThuChiSourceCatalogHandler(req: Request, res: Respon
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục nguồn ngoài." });
       return;
     }
-    const result = await updateThuChiSourceCatalog(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await updateThuChiSourceCatalog(String(req.params.id), body, {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không cập nhật được nguồn ngoài");
@@ -343,7 +383,15 @@ export async function deleteThuChiSourceCatalogHandler(req: Request, res: Respon
       res.status(403).json({ error: "Tài khoản đại lý không được chỉnh sửa danh mục nguồn ngoài." });
       return;
     }
-    const result = await deleteThuChiSourceCatalog(String(req.params.id));
+    const body = mergeBodyWithFujiActor(req, (req.body ?? {}) as Record<string, unknown>);
+    const labels = fujiAuditActorLabelsFromRequest(req);
+    const result = await deleteThuChiSourceCatalog(String(req.params.id), {
+      actorUserId: body.actorUserId as string | undefined,
+      ip: req.ip ?? null,
+      userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      actorEmail: labels.actorEmail,
+      actorDisplayName: labels.actorDisplayName,
+    });
     res.json(result);
   } catch (error) {
     handleError(res, error, "Không xóa được nguồn ngoài");

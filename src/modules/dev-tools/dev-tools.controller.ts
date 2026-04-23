@@ -1,4 +1,7 @@
 import type { Request, Response } from "express";
+import mongoose from "mongoose";
+import { writeAuditLog } from "@/lib/audit";
+import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
 import { purgeMockData } from "./dev-tools.service";
 
 function readSecret(headers: Request["headers"]): string | null {
@@ -29,6 +32,23 @@ export const DevToolsController = {
 
     try {
       const summary = await purgeMockData();
+      const actorRaw = typeof req.fujiUserId === "string" ? req.fujiUserId.trim() : "";
+      const actorUserId =
+        actorRaw && mongoose.isValidObjectId(actorRaw)
+          ? new mongoose.Types.ObjectId(actorRaw)
+          : new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
+      await writeAuditLog({
+        actorUserId,
+        action: "dev_tools.purge_mock_data",
+        entityType: "SystemMaintenance",
+        entityId: new mongoose.Types.ObjectId(),
+        metadata: {
+          summary,
+          collectionsAffected: Object.keys(summary).length,
+        },
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+      });
       res.json({ ok: true, summary });
     } catch (error) {
       const message = error instanceof Error ? error.message : "purge_failed";

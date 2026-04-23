@@ -2,11 +2,35 @@ import mongoose from "mongoose";
 import type { Request, Response } from "express";
 import { writeAuditLog } from "@/lib/audit";
 import { fujiAuditActorLabelsFromRequest } from "@/lib/fuji-actor";
+import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
 import { BillingScanService } from "./billing-scan.service";
 
 export const BillingScanController = {
   // Deprecated endpoints
-  deprecatedJob(req: Request, res: Response) {
+  async deprecatedJob(req: Request, res: Response) {
+    try {
+      const actorId =
+        req.fujiUserId && mongoose.isValidObjectId(req.fujiUserId)
+          ? new mongoose.Types.ObjectId(req.fujiUserId)
+          : new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      await writeAuditLog({
+        actorUserId: actorId,
+        action: "billing_scan.deprecated_job_access",
+        entityType: "BillingScanJob",
+        entityId: new mongoose.Types.ObjectId(),
+        metadata: {
+          method: req.method,
+          path: req.originalUrl ?? req.path,
+        },
+        ip: req.ip ?? null,
+        userAgent: req.get("user-agent") ?? null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
+    } catch {
+      // audit không chặn phản hồi endpoint deprecated
+    }
     res.status(410).json({
       error: "Billing scan job deprecated.",
       data: req.method === "GET" ? [] : undefined,

@@ -1,4 +1,21 @@
 import { CustomerAccountRepository } from "./customer-accounts.repository";
+import mongoose from "mongoose";
+import { writeAuditLog } from "@/lib/audit";
+import { ELEC_SYSTEM_AUDIT_ACTOR_ID } from "@/lib/elec-crm-audit";
+
+type AuditCtx = {
+  actorUserId?: string;
+  ip?: string | null;
+  userAgent?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
+};
+
+function resolveActorId(raw?: string): mongoose.Types.ObjectId {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (s && mongoose.isValidObjectId(s)) return new mongoose.Types.ObjectId(s);
+  return new mongoose.Types.ObjectId(ELEC_SYSTEM_AUDIT_ACTOR_ID);
+}
 
 export const CustomerAccountService = {
   async getList(search: string, page: number, limit: number) {
@@ -34,7 +51,7 @@ export const CustomerAccountService = {
     return { data: mappedData, total };
   },
 
-  async importRows(rows: any[]) {
+  async importRows(rows: any[], ctx?: AuditCtx) {
     const ops = rows
       .map((r) => {
         const code = typeof r.customerCode === "string" ? r.customerCode.trim() : "";
@@ -60,6 +77,21 @@ export const CustomerAccountService = {
       .filter(Boolean);
 
     const result = await CustomerAccountRepository.bulkUpsert(ops);
+    await writeAuditLog({
+      actorUserId: resolveActorId(ctx?.actorUserId),
+      action: "customer_account.import",
+      entityType: "CustomerAccountImport",
+      entityId: new mongoose.Types.ObjectId(),
+      metadata: {
+        inserted: result.upsertedCount,
+        updated: result.modifiedCount,
+        totalCount: ops.length,
+      },
+      ip: ctx?.ip ?? null,
+      userAgent: ctx?.userAgent ?? null,
+      actorEmail: ctx?.actorEmail,
+      actorDisplayName: ctx?.actorDisplayName,
+    });
     return {
       inserted: result.upsertedCount,
       updated: result.modifiedCount,
@@ -67,17 +99,57 @@ export const CustomerAccountService = {
     };
   },
 
-  async deleteAccount(id: string) {
-    return await CustomerAccountRepository.deleteById(id);
+  async deleteAccount(id: string, ctx?: AuditCtx) {
+    const deleted = await CustomerAccountRepository.deleteById(id);
+    if (deleted) {
+      await writeAuditLog({
+        actorUserId: resolveActorId(ctx?.actorUserId),
+        action: "customer_account.delete",
+        entityType: "CustomerAccount",
+        entityId: deleted._id,
+        metadata: {
+          accountId: String(deleted._id),
+          customerCode: deleted.customerCode ?? null,
+          companyName: deleted.companyName ?? null,
+          stationCode: deleted.stationCode ?? null,
+        },
+        ip: ctx?.ip ?? null,
+        userAgent: ctx?.userAgent ?? null,
+        actorEmail: ctx?.actorEmail,
+        actorDisplayName: ctx?.actorDisplayName,
+      });
+    }
+    return deleted;
   },
 
-  async updateAccount(id: string, body: any) {
+  async updateAccount(id: string, body: any, ctx?: AuditCtx) {
     const { active, note, evnPass } = body;
     const update: Record<string, any> = {};
     if (active !== undefined) update.active = active;
     if (note !== undefined) update.note = note;
     if (evnPass !== undefined) update.evnPass = evnPass;
-    
-    return await CustomerAccountRepository.updateById(id, update);
+
+    const doc = await CustomerAccountRepository.updateById(id, update);
+    if (doc) {
+      await writeAuditLog({
+        actorUserId: resolveActorId(ctx?.actorUserId),
+        action: "customer_account.update",
+        entityType: "CustomerAccount",
+        entityId: new mongoose.Types.ObjectId(String(doc._id)),
+        metadata: {
+          accountId: String(doc._id),
+          customerCode: doc.customerCode ?? null,
+          changedFields: Object.keys(update),
+          active: doc.active,
+          note: doc.note ?? null,
+          evnPassChanged: evnPass !== undefined,
+        },
+        ip: ctx?.ip ?? null,
+        userAgent: ctx?.userAgent ?? null,
+        actorEmail: ctx?.actorEmail,
+        actorDisplayName: ctx?.actorDisplayName,
+      });
+    }
+    return doc;
   }
 };

@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { CustomerAccountService } from "./customer-accounts.service";
+import { fujiAuditActorLabelsFromRequest, mergeBodyWithFujiActor } from "@/lib/fuji-actor";
 
 export const CustomerAccountController = {
   async list(req: Request, res: Response) {
@@ -25,7 +26,15 @@ export const CustomerAccountController = {
     }
 
     try {
-      const result = await CustomerAccountService.importRows(rows);
+      const actorBody = mergeBodyWithFujiActor(req, {});
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      const result = await CustomerAccountService.importRows(rows, {
+        actorUserId: actorBody.actorUserId as string | undefined,
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
       res.json({ ok: true, ...result });
     } catch (err) {
       res.status(500).json({ error: "Lỗi server khi import" });
@@ -36,7 +45,15 @@ export const CustomerAccountController = {
     try {
       //ep kieu = string
       const id = String(req.params.id);
-      const deleted = await CustomerAccountService.deleteAccount(id);
+      const actorBody = mergeBodyWithFujiActor(req, {});
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      const deleted = await CustomerAccountService.deleteAccount(id, {
+        actorUserId: actorBody.actorUserId as string | undefined,
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
       if (!deleted) return res.status(404).json({ error: "Không tìm thấy" });
       res.json({ ok: true });
     } catch (err) {
@@ -47,7 +64,15 @@ export const CustomerAccountController = {
   async patch(req: Request, res: Response) {
     try {
       const id = String(req.params.id);
-      const doc = await CustomerAccountService.updateAccount(id, req.body);
+      const actorBody = mergeBodyWithFujiActor(req, {});
+      const labels = fujiAuditActorLabelsFromRequest(req);
+      const doc = await CustomerAccountService.updateAccount(id, req.body, {
+        actorUserId: actorBody.actorUserId as string | undefined,
+        ip: req.ip ?? null,
+        userAgent: typeof req.get === "function" ? req.get("user-agent") ?? null : null,
+        actorEmail: labels.actorEmail,
+        actorDisplayName: labels.actorDisplayName,
+      });
       if (!doc) return res.status(404).json({ error: "Không tìm thấy" });
       res.json({ ok: true, data: doc });
     } catch (err) {
